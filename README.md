@@ -1,6 +1,6 @@
 # CUA_Collector
 
-<video src="Demo.mp4" controls autoplay loop muted playsinline style="max-width: 100%; width: 100%; border-radius: 12px;"></video>
+![Demo](Demo.gif)
 
 `CUA_Collector` is a lightweight desktop data collection tool for Computer Use Agent workflows. It records UI interaction traces as paired screenshots around each user action:
 
@@ -106,7 +106,7 @@ Use this when you want to manually demonstrate a desktop workflow and save it as
 
 ## License
 
-Commercial Use: let's discuss by puma122707@gmail.com. Especially Tencent, ByteDance, Huawei, please behave.
+Commercial Use: let's discuss by puma122707@gmail.com.
 
 Non-Commercial Use: free.
 
