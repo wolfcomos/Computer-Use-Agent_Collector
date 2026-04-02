@@ -16,7 +16,7 @@
 `Windows` does **not** need `setup.sh` or `setup_extension.sh`.
 
 ```powershell
-git clone <repo-url>
+git clone https://github.com/Zdong104/CUA_Collector.git
 cd CUA_Collector
 python -m venv .venv
 .venv\Scripts\activate
@@ -31,7 +31,7 @@ Note: Windows currently supports **single monitor only**. Multi-monitor setups c
 `macOS` does **not** need `setup.sh` or `setup_extension.sh`.
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Zdong104/CUA_Collector.git
 cd CUA_Collector
 python3 -m venv .venv
 source .venv/bin/activate
@@ -46,7 +46,7 @@ Note: macOS currently supports **single monitor only**. Multi-monitor setups can
 `setup.sh` and `setup_extension.sh` are only for `Ubuntu Wayland / GNOME`.
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Zdong104/CUA_Collector.git
 cd CUA_Collector
 bash setup.sh
 
