@@ -76,3 +76,23 @@ data/
 
 The original manual collector, setup scripts, and its existing datasets now live in [`V1/`](./V1).
 Its output defaults to `V1/data/`.
+
+
+## Citation
+
+```bibtex
+@misc{dong2026cuacollector,
+  author = {Zihan Dong},
+  title = {ComputerUseAgent_Collector},
+  year = {2026},
+  note = {Computer Use Agent behavior cloning tool}
+}
+```
+
+## License
+
+Commercial Use: let's discuss by puma122707@gmail.com.
+
+Non-Commercial Use: free.
+
+Research Use: free.
