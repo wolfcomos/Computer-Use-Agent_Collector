@@ -229,6 +229,13 @@ private:
     int    last_click_x_{0}, last_click_y_{0};
     std::string last_click_button_;
 
+    // Pending click that might become part of a double-click
+    struct PendingClick {
+        bool active{false};
+        PendingAction action;
+    };
+    PendingClick pending_click_;
+
     // Last scroll for burst merging
     double last_scroll_ts_{0};
 

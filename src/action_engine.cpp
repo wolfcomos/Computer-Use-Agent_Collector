@@ -176,22 +176,54 @@ void ActionEngine::handle_mouse_up(const RawInputEvent& ev) {
         return;
     }
 
-    auto pending = create_pending(type, event_ts, action_x, action_y,
-                                   ev.button_name);
+    // Handle double-click detection: suppress first click if second click arrives
+    if (type == ActionType::DOUBLE_CLICK) {
+        // This is the second click - discard the pending first click if it exists
+        if (pending_click_.active) {
+            pending_click_.active = false;
+        }
+        // Record the double-click immediately
+        auto pending = create_pending(type, event_ts, action_x, action_y,
+                                       ev.button_name);
+        pending.press_ts = state.down_ts;
+        pending.release_ts = ev.timestamp_sec;
+        pending.required_post_ts = ev.timestamp_sec + POST_FRAME_OFFSET;
+        pending.last_event_ts = ev.timestamp_sec;
+        pending.raw_events.push_back(down_ev);
+        pending.raw_events.push_back(ev);
+        pending_.push_back(std::move(pending));
+    } else if (type == ActionType::CLICK) {
+        // This is a potential first click - delay recording it
+        auto pending = create_pending(type, event_ts, action_x, action_y,
+                                       ev.button_name);
+        pending.press_ts = state.down_ts;
+        pending.release_ts = ev.timestamp_sec;
+        pending.required_post_ts = ev.timestamp_sec + POST_FRAME_OFFSET;
+        pending.last_event_ts = ev.timestamp_sec;
+        pending.raw_events.push_back(down_ev);
+        pending.raw_events.push_back(ev);
 
-    if (type == ActionType::DRAG) {
-        pending.press_x = state.down_x;
-        pending.press_y = state.down_y;
-        pending.release_x = ev.x;
-        pending.release_y = ev.y;
+        // Store as pending click instead of adding to pending_ immediately
+        pending_click_.active = true;
+        pending_click_.action = std::move(pending);
+    } else {
+        // Drag or other action - record immediately
+        auto pending = create_pending(type, event_ts, action_x, action_y,
+                                       ev.button_name);
+        if (type == ActionType::DRAG) {
+            pending.press_x = state.down_x;
+            pending.press_y = state.down_y;
+            pending.release_x = ev.x;
+            pending.release_y = ev.y;
+        }
+        pending.press_ts = state.down_ts;
+        pending.release_ts = ev.timestamp_sec;
+        pending.required_post_ts = ev.timestamp_sec + POST_FRAME_OFFSET;
+        pending.last_event_ts = ev.timestamp_sec;
+        pending.raw_events.push_back(down_ev);
+        pending.raw_events.push_back(ev);
+        pending_.push_back(std::move(pending));
     }
-    pending.press_ts = state.down_ts;
-    pending.release_ts = ev.timestamp_sec;
-    pending.required_post_ts = ev.timestamp_sec + POST_FRAME_OFFSET;
-    pending.last_event_ts = ev.timestamp_sec;
-    pending.raw_events.push_back(down_ev);
-    pending.raw_events.push_back(ev);
-    pending_.push_back(std::move(pending));
 }
 
 void ActionEngine::handle_scroll(const RawInputEvent& ev) {
@@ -372,6 +404,17 @@ void ActionEngine::check_pending_completions() {
     std::lock_guard lock(pending_mu_);
 
     double now = monotonic_now();
+
+    // Check if pending click has timed out (no double-click arrived)
+    if (pending_click_.active) {
+        double time_since_click = now - pending_click_.action.release_ts;
+        if (time_since_click >= DOUBLE_CLICK_MAX_INTERVAL) {
+            // Timeout expired - finalize the single click
+            pending_.push_back(std::move(pending_click_.action));
+            pending_click_.active = false;
+        }
+    }
+
     auto it = pending_.begin();
 
     while (it != pending_.end()) {
