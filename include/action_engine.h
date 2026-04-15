@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <deque>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -154,6 +155,10 @@ public:
     /// Max time to wait for post-frame before giving up (seconds)
     static constexpr double POST_FRAME_TIMEOUT = 5.0;
 
+    /// Min hold time for a modifier release to be considered intentional (ms).
+    /// Releases shorter than this are ignored (accidental modifier taps).
+    static constexpr double MODIFIER_DEBOUNCE_MS = 200.0;
+
     /// Inject a synthetic event (for testing)
     void inject_event(RawInputEvent ev);
 
@@ -264,7 +269,8 @@ private:
                                        const RawInputEvent& down_ev,
                                        const RawInputEvent& up_ev,
                                        double press_ts,
-                                       double release_ts);
+                                       double release_ts,
+                                       const std::vector<std::string>& combo = {});
     void merge_mouse_into_pending_locked(PendingAction& pending,
                                          ActionType type,
                                          const std::string& button_name,
@@ -280,6 +286,18 @@ private:
                                          int release_y);
 
     MouseButtonState& get_button_state(const std::string& name);
+
+    // ── State-based key combination tracking ─────────────────────
+    // Tracks ALL currently-pressed keys (including modifiers) so we can
+    // record the full combination on key release.
+    std::set<std::string> active_keys_;
+
+    // Tracks when each modifier key was pressed, for debouncing.
+    // Only used for modifier keys to ignore accidental taps < MODIFIER_DEBOUNCE_MS.
+    std::unordered_map<std::string, double> modifier_press_ts_;
+
+    // Returns true for modifier key names (ctrl, shift, alt, super, fn).
+    static bool is_modifier_key(const std::string& name);
 
     double monotonic_now() const;
 };

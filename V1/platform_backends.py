@@ -601,8 +601,20 @@ class WaylandInputMonitor:
         self._ctrl_pressed = False
         self._devices = []
 
+        # Modifier key codes (for hotkey detection and state tracking).
+        self._modifier_codes = set()
+
+        # All key codes to human-readable names.
+        # Previously this was a restrictive allowlist that silently dropped
+        # letters/numbers/symbols — breaking combos like Ctrl+A, Shift+1, etc.
+        self._key_names = {}
+
+        # Active key tracking for state-based combo recording.
+        self._active_keys = {}   # scancode -> key_name
+
     def start(self):
         import evdev
+        from evdev import ecodes
         self._running = True
         all_devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
 
@@ -637,6 +649,184 @@ class WaylandInputMonitor:
             t.start()
             self._threads.append(t)
 
+    def _build_key_name(self, scancode: int, dev) -> str:
+        """Map an evdev scancode to a human-readable key name.
+        Covers all standard keys: modifiers, letters, numbers, punctuation,
+        function keys, navigation, and special keys."""
+        import evdev
+        from evdev import ecodes
+
+        # ── Modifiers ────────────────────────────────────────────
+        if scancode == ecodes.KEY_LEFTCTRL:   return "ctrl_l"
+        if scancode == ecodes.KEY_RIGHTCTRL:  return "ctrl_r"
+        if scancode == ecodes.KEY_LEFTSHIFT:  return "shift_l"
+        if scancode == ecodes.KEY_RIGHTSHIFT: return "shift_r"
+        if scancode == ecodes.KEY_LEFTALT:    return "alt_l"
+        if scancode == ecodes.KEY_RIGHTALT:   return "alt_r"
+        if scancode == ecodes.KEY_LEFTMETA:   return "super_l"
+        if scancode == ecodes.KEY_RIGHTMETA:  return "super_r"
+
+        # ── Special keys ─────────────────────────────────────────
+        if scancode == ecodes.KEY_ESC:        return "esc"
+        if scancode == ecodes.KEY_BACKSPACE:  return "backspace"
+        if scancode == ecodes.KEY_DELETE:     return "delete"
+        if scancode == ecodes.KEY_ENTER:      return "enter"
+        if scancode == ecodes.KEY_TAB:        return "tab"
+        if scancode == ecodes.KEY_SPACE:      return "space"
+        if scancode == ecodes.KEY_CAPSLOCK:   return "capslock"
+        if scancode == ecodes.KEY_INSERT:     return "insert"
+        if scancode == ecodes.KEY_HOME:       return "home"
+        if scancode == ecodes.KEY_END:        return "end"
+        if scancode == ecodes.KEY_PAGEUP:     return "pageup"
+        if scancode == ecodes.KEY_PAGEDOWN:   return "pagedown"
+        if scancode == ecodes.KEY_LINEFEED:   return "linefeed"
+        if scancode == ecodes.KEY_CLEAR:      return "clear"
+        if scancode == ecodes.KEY_SYSRQ:      return "sysrq"
+        if scancode == ecodes.KEY_SCROLLLOCK: return "scrolllock"
+        if scancode == ecodes.KEY_PAUSE:      return "pause"
+        if scancode == ecodes.KEY_PRINT:      return "print"
+        if scancode == ecodes.KEY_MENU:       return "menu"
+        if scancode == ecodes.KEY_FN:         return "fn"
+
+        # ── Navigation / Arrow keys ─────────────────────────────
+        if scancode == ecodes.KEY_UP:         return "up"
+        if scancode == ecodes.KEY_DOWN:       return "down"
+        if scancode == ecodes.KEY_LEFT:       return "left"
+        if scancode == ecodes.KEY_RIGHT:      return "right"
+
+        # ── Letters ─────────────────────────────────────────────
+        letter_map = {
+            ecodes.KEY_A: 'a', ecodes.KEY_B: 'b', ecodes.KEY_C: 'c',
+            ecodes.KEY_D: 'd', ecodes.KEY_E: 'e', ecodes.KEY_F: 'f',
+            ecodes.KEY_G: 'g', ecodes.KEY_H: 'h', ecodes.KEY_I: 'i',
+            ecodes.KEY_J: 'j', ecodes.KEY_K: 'k', ecodes.KEY_L: 'l',
+            ecodes.KEY_M: 'm', ecodes.KEY_N: 'n', ecodes.KEY_O: 'o',
+            ecodes.KEY_P: 'p', ecodes.KEY_Q: 'q', ecodes.KEY_R: 'r',
+            ecodes.KEY_S: 's', ecodes.KEY_T: 't', ecodes.KEY_U: 'u',
+            ecodes.KEY_V: 'v', ecodes.KEY_W: 'w', ecodes.KEY_X: 'x',
+            ecodes.KEY_Y: 'y', ecodes.KEY_Z: 'z',
+        }
+        if scancode in letter_map:
+            return letter_map[scancode]
+
+        # ── Numbers (top row, no shift) ────────────────────────
+        num_map = {
+            ecodes.KEY_1: '1', ecodes.KEY_2: '2', ecodes.KEY_3: '3',
+            ecodes.KEY_4: '4', ecodes.KEY_5: '5', ecodes.KEY_6: '6',
+            ecodes.KEY_7: '7', ecodes.KEY_8: '8', ecodes.KEY_9: '9',
+            ecodes.KEY_0: '0',
+        }
+        if scancode in num_map:
+            return num_map[scancode]
+
+        # ── Punctuation / Symbols ───────────────────────────────
+        punct_map = {
+            ecodes.KEY_GRAVE:      '`',
+            ecodes.KEY_MINUS:      '-',
+            ecodes.KEY_EQUAL:      '=',
+            ecodes.KEY_LEFTBRACE:  '[',
+            ecodes.KEY_RIGHTBRACE: ']',
+            ecodes.KEY_BACKSLASH:  '\\',
+            ecodes.KEY_SEMICOLON:  ';',
+            ecodes.KEY_APOSTROPHE: "'",
+            ecodes.KEY_COMMA:      ',',
+            ecodes.KEY_DOT:        '.',
+            ecodes.KEY_SLASH:      '/',
+            ecodes.KEY_102ND:      '102nd',
+        }
+        if scancode in punct_map:
+            return punct_map[scancode]
+
+        # ── Numpad keys ────────────────────────────────────────
+        kp_map = {
+            ecodes.KEY_KP0: 'kp_0', ecodes.KEY_KP1: 'kp_1',
+            ecodes.KEY_KP2: 'kp_2', ecodes.KEY_KP3: 'kp_3',
+            ecodes.KEY_KP4: 'kp_4', ecodes.KEY_KP5: 'kp_5',
+            ecodes.KEY_KP6: 'kp_6', ecodes.KEY_KP7: 'kp_7',
+            ecodes.KEY_KP8: 'kp_8', ecodes.KEY_KP9: 'kp_9',
+            ecodes.KEY_KPASTERISK: 'kp_*',
+            ecodes.KEY_KPSLASH:    'kp_/',
+            ecodes.KEY_KPPLUS:     'kp_+',
+            ecodes.KEY_KPMINUS:   'kp_-',
+            ecodes.KEY_KPDOT:     'kp_.',
+            ecodes.KEY_KPEQUAL:   'kp_=',
+            ecodes.KEY_KPLEFTPAREN:  'kp_(',
+            ecodes.KEY_KPRIGHTPAREN: 'kp_)',
+            ecodes.KEY_KPENTER:   'kp_enter',
+            ecodes.KEY_NUMLOCK:   'numlock',
+        }
+        if scancode in kp_map:
+            return kp_map[scancode]
+
+        # ── Function keys ──────────────────────────────────────
+        fn_map = {
+            ecodes.KEY_F1: 'f1',  ecodes.KEY_F2: 'f2',
+            ecodes.KEY_F3: 'f3',  ecodes.KEY_F4: 'f4',
+            ecodes.KEY_F5: 'f5',  ecodes.KEY_F6: 'f6',
+            ecodes.KEY_F7: 'f7',  ecodes.KEY_F8: 'f8',
+            ecodes.KEY_F9: 'f9',  ecodes.KEY_F10: 'f10',
+            ecodes.KEY_F11: 'f11', ecodes.KEY_F12: 'f12',
+            ecodes.KEY_F13: 'f13', ecodes.KEY_F14: 'f14',
+            ecodes.KEY_F15: 'f15', ecodes.KEY_F16: 'f16',
+            ecodes.KEY_F17: 'f17', ecodes.KEY_F18: 'f18',
+            ecodes.KEY_F19: 'f19', ecodes.KEY_F20: 'f20',
+            ecodes.KEY_F21: 'f21', ecodes.KEY_F22: 'f22',
+            ecodes.KEY_F23: 'f23', ecodes.KEY_F24: 'f24',
+        }
+        if scancode in fn_map:
+            return fn_map[scancode]
+
+        # ── Media / AC keys ────────────────────────────────────
+        media_map = {
+            ecodes.KEY_PLAYPAUSE:    'playpause',
+            ecodes.KEY_STOP:         'stop',
+            ecodes.KEY_NEXTSONG:     'nextsong',
+            ecodes.KEY_PREVIOUSSONG: 'prevsong',
+            ecodes.KEY_MUTE:         'mute',
+            ecodes.KEY_VOLUMEUP:     'volumeup',
+            ecodes.KEY_VOLUMEDOWN:   'volumedown',
+            ecodes.KEY_POWER:        'power',
+            ecodes.KEY_WAKEUP:       'wakeup',
+            ecodes.KEY_SLEEP:        'sleep',
+            ecodes.KEY_EJECTCD:      'ejectcd',
+            ecodes.KEY_BRIGHTNESSDOWN:   'brightnessdown',
+            ecodes.KEY_BRIGHTNESSUP:    'brightnessup',
+            ecodes.KEY_MICMUTE:      'micmute',
+            ecodes.KEY_WWW:          'www',
+            ecodes.KEY_MAIL:         'mail',
+            ecodes.KEY_CALC:         'calc',
+            ecodes.KEY_SEARCH:       'search',
+            ecodes.KEY_HOMEPAGE:     'homepage',
+            ecodes.KEY_BACK:         'browser_back',
+            ecodes.KEY_FORWARD:      'browser_forward',
+            ecodes.KEY_REFRESH:      'browser_refresh',
+            ecodes.KEY_BOOKMARKS:    'browser_bookmarks',
+            ecodes.KEY_ZOOMIN:       'zoom_in',
+            ecodes.KEY_ZOOMOUT:      'zoom_out',
+        }
+        if scancode in media_map:
+            return media_map[scancode]
+
+        # Try evdev's built-in key name lookup as fallback
+        try:
+            name = dev.device.keycode(scancode)
+            if isinstance(name, list) and name:
+                return name[0].lower()
+        except Exception:
+            pass
+
+        return ""  # Unknown — skip
+
+    def _is_modifier(self, scancode: int) -> bool:
+        import evdev
+        from evdev import ecodes
+        return scancode in (
+            ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL,
+            ecodes.KEY_LEFTSHIFT, ecodes.KEY_RIGHTSHIFT,
+            ecodes.KEY_LEFTALT, ecodes.KEY_RIGHTALT,
+            ecodes.KEY_LEFTMETA, ecodes.KEY_RIGHTMETA,
+        )
+
     def _monitor_device(self, device, is_keyboard: bool, is_mouse: bool):
         import evdev
         from evdev import ecodes
@@ -648,38 +838,43 @@ class WaylandInputMonitor:
 
                 if event.type == ecodes.EV_KEY:
                     key_event = evdev.categorize(event)
+                    scancode = key_event.scancode
+                    is_down = key_event.keystate == 1
+                    is_up = key_event.keystate == 0
 
-                    # Track Ctrl
-                    if key_event.scancode in (ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL):
-                        self._ctrl_pressed = key_event.keystate != 0
+                    # Track Ctrl for hotkey detection
+                    if scancode in (ecodes.KEY_LEFTCTRL, ecodes.KEY_RIGHTCTRL):
+                        self._ctrl_pressed = is_down
 
                     # Hotkeys on key-down
-                    if key_event.keystate == 1 and self._ctrl_pressed:
-                        if key_event.scancode == ecodes.KEY_F8:
+                    if is_down and self._ctrl_pressed:
+                        if scancode == ecodes.KEY_F8:
                             threading.Thread(target=self.callbacks['on_hotkey_start_task'], daemon=True).start()
-                        elif key_event.scancode == ecodes.KEY_F9:
+                        elif scancode == ecodes.KEY_F9:
                             threading.Thread(target=self.callbacks['on_hotkey_screenshot'], daemon=True).start()
-                        elif key_event.scancode == ecodes.KEY_F12:
+                        elif scancode == ecodes.KEY_F12:
                             threading.Thread(target=self.callbacks['on_hotkey_end_task'], daemon=True).start()
 
                     # ESC (no Ctrl needed) to drop current action
-                    if key_event.keystate == 1 and key_event.scancode == ecodes.KEY_ESC:
+                    if is_down and scancode == ecodes.KEY_ESC:
                         threading.Thread(target=self.callbacks['on_hotkey_drop_action'], daemon=True).start()
 
-                    # Modifiers / Special keys tracking
-                    special_keys = {
-                        ecodes.KEY_LEFTCTRL: 'ctrl_l',
-                        ecodes.KEY_RIGHTCTRL: 'ctrl_r',
-                        ecodes.KEY_LEFTSHIFT: 'shift_l',
-                        ecodes.KEY_RIGHTSHIFT: 'shift_r',
-                        ecodes.KEY_ESC: 'esc',
-                        ecodes.KEY_BACKSPACE: 'backspace',
-                        ecodes.KEY_ENTER: 'enter',
-                        ecodes.KEY_FN: 'fn',
-                    }
-                    if key_event.scancode in special_keys and key_event.keystate in (0, 1): # 0 is up, 1 is down
-                        if 'on_key_event' in self.callbacks:
-                            threading.Thread(target=self.callbacks['on_key_event'], args=(special_keys[key_event.scancode], key_event.keystate == 1), daemon=True).start()
+                    # ── ALL key events (no restrictive allowlist) ──
+                    # Previously only modifiers were tracked, dropping letters/numbers.
+                    if is_keyboard and (is_down or is_up):
+                        name = self._build_key_name(scancode, device)
+                        if name:
+                            if is_down:
+                                self._active_keys[scancode] = name
+                            else:
+                                self._active_keys.pop(scancode, None)
+
+                            if 'on_key_event' in self.callbacks:
+                                threading.Thread(
+                                    target=self.callbacks['on_key_event'],
+                                    args=(name, is_down),
+                                    daemon=True
+                                ).start()
 
                     # Mouse button press/release
                     if is_mouse:
@@ -688,9 +883,13 @@ class WaylandInputMonitor:
                             ecodes.BTN_RIGHT: 'right',
                             ecodes.BTN_MIDDLE: 'middle',
                         }
-                        if key_event.scancode in btn_map and key_event.keystate in (0, 1):
+                        if scancode in btn_map and (is_down or is_up):
                             if 'on_mouse_button' in self.callbacks:
-                                threading.Thread(target=self.callbacks['on_mouse_button'], args=(btn_map[key_event.scancode], key_event.keystate == 1), daemon=True).start()
+                                threading.Thread(
+                                    target=self.callbacks['on_mouse_button'],
+                                    args=(btn_map[scancode], is_down),
+                                    daemon=True
+                                ).start()
 
                 elif event.type == ecodes.EV_REL and is_mouse:
                     if event.code in (ecodes.REL_WHEEL, getattr(ecodes, 'REL_WHEEL_HI_RES', 11)):
@@ -763,18 +962,74 @@ class PynputInputMonitor:
             threading.Thread(target=self.callbacks['on_key_event'], args=(key_name, False), daemon=True).start()
 
     def _map_pynput_key(self, key):
+        """Map a pynput key to a human-readable key name.
+        Previously this only handled modifiers + a few special keys,
+        silently dropping all letters/numbers/symbols — breaking combos."""
         from pynput import keyboard
-        mapping = {
-            keyboard.Key.ctrl_l: 'ctrl_l',
-            keyboard.Key.ctrl_r: 'ctrl_r',
-            keyboard.Key.shift_l: 'shift_l',
-            keyboard.Key.shift_r: 'shift_r',
-            keyboard.Key.esc: 'esc',
-            keyboard.Key.backspace: 'backspace',
-            keyboard.Key.enter: 'enter',
+
+        MODIFIER_KEYS = {
+            keyboard.Key.ctrl_l:    'ctrl_l',
+            keyboard.Key.ctrl_r:    'ctrl_r',
+            keyboard.Key.shift_l:   'shift_l',
+            keyboard.Key.shift_r:   'shift_r',
+            keyboard.Key.alt_l:     'alt_l',
+            keyboard.Key.alt_r:     'alt_r',
+            keyboard.Key.cmd_l:     'super_l',
+            keyboard.Key.cmd_r:     'super_r',
         }
-        if key in mapping:
-            return mapping[key]
+
+        SPECIAL_KEYS = {
+            keyboard.Key.esc:         'esc',
+            keyboard.Key.backspace:   'backspace',
+            keyboard.Key.enter:       'enter',
+            keyboard.Key.tab:         'tab',
+            keyboard.Key.space:       'space',
+            keyboard.Key.caps_lock:   'capslock',
+            keyboard.Key.delete:      'delete',
+            keyboard.Key.insert:      'insert',
+            keyboard.Key.home:        'home',
+            keyboard.Key.end:         'end',
+            keyboard.Key.page_up:     'pageup',
+            keyboard.Key.page_down:   'pagedown',
+            keyboard.Key.up:          'up',
+            keyboard.Key.down:        'down',
+            keyboard.Key.left:        'left',
+            keyboard.Key.right:       'right',
+            keyboard.Key.num_lock:    'numlock',
+            keyboard.Key.print_screen: 'print',
+            keyboard.Key.scroll_lock:  'scrolllock',
+            keyboard.Key.pause:       'pause',
+            keyboard.Key.menu:        'menu',
+        }
+
+        # Try modifier keys
+        if key in MODIFIER_KEYS:
+            return MODIFIER_KEYS[key]
+        # Try special/function keys
+        if key in SPECIAL_KEYS:
+            return SPECIAL_KEYS[key]
+
+        # Function keys f1–f24
+        fn = getattr(keyboard.Key, 'f1', None)
+        if fn is not None:
+            for i in range(1, 25):
+                fkey = getattr(keyboard.Key, f'f{i}', None)
+                if fkey is not None and key == fkey:
+                    return f'f{i}'
+
+        # Alphanumeric character keys (e.g. 'a', '1', '`', '-', etc.)
+        # pynput returns these as char strings for printable characters.
+        if hasattr(key, 'char') and key.char is not None:
+            return key.char
+
+        # Named keys that pynput exposes as .name (e.g. 'ctrl', 'shift', etc.)
+        if hasattr(key, 'name'):
+            name = key.name
+            # Handle platform-specific extra keys
+            if name in ('ctrl', 'shift', 'alt', 'cmd', 'fn'):
+                return name  # These are non-directional modifier names
+            return name
+
         return None
 
     def _on_click(self, x, y, button, pressed):

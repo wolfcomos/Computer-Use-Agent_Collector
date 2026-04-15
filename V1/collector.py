@@ -512,24 +512,45 @@ class Collector:
     # ---- mouse/key handlers ----
 
     def _on_key_event(self, key_name: str, pressed: bool):
+        """Handle key press/release with state-based combination tracking.
+
+        Previously this only recorded the individual released key, losing
+        modifier context (e.g. Shift+G → recorded as just "G").
+        Now captures the full active key combination on each release."""
         now = datetime.now(timezone.utc)
         with self._lock:
             if pressed:
                 if key_name not in self._active_keys:
                     self._active_keys[key_name] = now
             else:
-                if key_name in self._active_keys:
-                    press_time = self._active_keys.pop(key_name)
-                    if self.state in ('WAITING_ACTION', 'WAITING_TIMEOUT'):
-                        delta_time = (now - press_time).total_seconds()
-                        self._completed_key_actions.append({
-                            'key': key_name,
-                            'press_time': press_time.isoformat(),
-                            'release_time': now.isoformat(),
-                            'delta_time': delta_time
-                        })
-                        if not self._action_time:
-                            self._action_time = press_time.isoformat()
+                if key_name not in self._active_keys:
+                    return  # Spurious release without press
+
+                press_time = self._active_keys.pop(key_name)
+                delta_time = (now - press_time).total_seconds()
+
+                # Debounce: ignore modifier releases held for < 200ms
+                # (accidental modifier taps like accidentally hitting Shift)
+                MODIFIER_KEYS = {'ctrl_l', 'ctrl_r', 'shift_l', 'shift_r',
+                                 'alt_l', 'alt_r', 'super_l', 'super_r', 'fn'}
+                if key_name in MODIFIER_KEYS and delta_time * 1000 < 200:
+                    return  # Ignore accidental modifier tap
+
+                # Build the full key combination snapshot at release time.
+                # Includes all keys that were active simultaneously with the
+                # released key (i.e., the hotkey combo).
+                combo = list(self._active_keys.keys()) + [key_name]
+
+                if self.state in ('WAITING_ACTION', 'WAITING_TIMEOUT'):
+                    self._completed_key_actions.append({
+                        'combo': combo,
+                        'key': key_name,
+                        'press_time': press_time.isoformat(),
+                        'release_time': now.isoformat(),
+                        'delta_time': delta_time
+                    })
+                    if not self._action_time:
+                        self._action_time = press_time.isoformat()
 
             if self.state in ('WAITING_ACTION', 'WAITING_TIMEOUT'):
                 self._reset_timer_if_idle()

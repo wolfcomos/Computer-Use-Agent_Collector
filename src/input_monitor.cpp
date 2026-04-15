@@ -27,7 +27,10 @@ namespace cua {
 
 namespace {
 
-bool is_tracked_special_key(int code) {
+// Returns true for modifier keys (used for Ctrl hotkey detection).
+// Note: all keys are now tracked for combination recording; this only
+// determines whether the internal Ctrl hotkey callback fires.
+bool is_modifier_key(int code) {
     switch (code) {
         case KEY_LEFTCTRL:
         case KEY_RIGHTCTRL:
@@ -37,15 +40,198 @@ bool is_tracked_special_key(int code) {
         case KEY_RIGHTALT:
         case KEY_LEFTMETA:
         case KEY_RIGHTMETA:
-        case KEY_ESC:
-        case KEY_BACKSPACE:
-        case KEY_DELETE:
-        case KEY_ENTER:
-        case KEY_TAB:
-        case KEY_FN:
             return true;
         default:
             return false;
+    }
+}
+
+// Maps evdev key codes to human-readable key names.
+// Covers modifiers, letters, numbers, punctuation, function keys,
+// navigation keys, and common special keys.
+// Returns "" for unknown codes (but we now track ALL key events).
+std::string key_to_name_impl(int code) {
+    switch (code) {
+        // ── Modifiers ──────────────────────────────────────────────
+        case KEY_LEFTCTRL:   return "ctrl_l";
+        case KEY_RIGHTCTRL:  return "ctrl_r";
+        case KEY_LEFTSHIFT:  return "shift_l";
+        case KEY_RIGHTSHIFT: return "shift_r";
+        case KEY_LEFTALT:    return "alt_l";
+        case KEY_RIGHTALT:   return "alt_r";
+        case KEY_LEFTMETA:   return "super_l";
+        case KEY_RIGHTMETA:  return "super_r";
+
+        // ── Special keys ───────────────────────────────────────────
+        case KEY_ESC:        return "esc";
+        case KEY_BACKSPACE:  return "backspace";
+        case KEY_DELETE:     return "delete";
+        case KEY_ENTER:      return "enter";
+        case KEY_TAB:        return "tab";
+        case KEY_SPACE:      return "space";
+        case KEY_CAPSLOCK:   return "capslock";
+        case KEY_INSERT:     return "insert";
+        case KEY_HOME:       return "home";
+        case KEY_END:        return "end";
+        case KEY_PAGEUP:     return "pageup";
+        case KEY_PAGEDOWN:   return "pagedown";
+        case KEY_LINEFEED:   return "linefeed";
+        case KEY_CLEAR:      return "clear";
+        case KEY_SYSRQ:      return "sysrq";
+        case KEY_SCROLLLOCK: return "scrolllock";
+        case KEY_PAUSE:      return "pause";
+        case KEY_PRINT:      return "print";
+        case KEY_MENU:       return "menu";
+        case KEY_FN:         return "fn";
+
+        // ── Navigation / Arrow keys ────────────────────────────────
+        case KEY_UP:         return "up";
+        case KEY_DOWN:       return "down";
+        case KEY_LEFT:       return "left";
+        case KEY_RIGHT:      return "right";
+
+        // ── Letters ───────────────────────────────────────────────
+        case KEY_A:          return "a";
+        case KEY_B:          return "b";
+        case KEY_C:          return "c";
+        case KEY_D:          return "d";
+        case KEY_E:          return "e";
+        case KEY_F:          return "f";
+        case KEY_G:          return "g";
+        case KEY_H:          return "h";
+        case KEY_I:          return "i";
+        case KEY_J:          return "j";
+        case KEY_K:          return "k";
+        case KEY_L:          return "l";
+        case KEY_M:          return "m";
+        case KEY_N:          return "n";
+        case KEY_O:          return "o";
+        case KEY_P:          return "p";
+        case KEY_Q:          return "q";
+        case KEY_R:          return "r";
+        case KEY_S:          return "s";
+        case KEY_T:          return "t";
+        case KEY_U:          return "u";
+        case KEY_V:          return "v";
+        case KEY_W:          return "w";
+        case KEY_X:          return "x";
+        case KEY_Y:          return "y";
+        case KEY_Z:          return "z";
+
+        // ── Numbers (top row, no shift) ────────────────────────────
+        case KEY_1:          return "1";
+        case KEY_2:          return "2";
+        case KEY_3:          return "3";
+        case KEY_4:          return "4";
+        case KEY_5:          return "5";
+        case KEY_6:          return "6";
+        case KEY_7:          return "7";
+        case KEY_8:          return "8";
+        case KEY_9:          return "9";
+        case KEY_0:          return "0";
+
+        // ── Punctuation / Symbols ─────────────────────────────────
+        case KEY_GRAVE:      return "`";
+        case KEY_MINUS:      return "-";
+        case KEY_EQUAL:      return "=";
+        case KEY_LEFTBRACE:  return "[";
+        case KEY_RIGHTBRACE: return "]";
+        case KEY_BACKSLASH:  return "\\";
+        case KEY_SEMICOLON:  return ";";
+        case KEY_APOSTROPHE: return "'";
+        case KEY_COMMA:      return ",";
+        case KEY_DOT:        return ".";
+        case KEY_SLASH:      return "/";
+        case KEY_102ND:      return "102nd";
+        case KEY_RO:         return "ro";
+        case KEY_YEN:        return "yen";
+
+        // ── Numpad keys ────────────────────────────────────────────
+        case KEY_KP0:        return "kp_0";
+        case KEY_KP1:        return "kp_1";
+        case KEY_KP2:        return "kp_2";
+        case KEY_KP3:        return "kp_3";
+        case KEY_KP4:        return "kp_4";
+        case KEY_KP5:        return "kp_5";
+        case KEY_KP6:        return "kp_6";
+        case KEY_KP7:        return "kp_7";
+        case KEY_KP8:        return "kp_8";
+        case KEY_KP9:        return "kp_9";
+        case KEY_KPASTERISK: return "kp_*";
+        case KEY_KPSLASH:    return "kp_/";
+        case KEY_KPPLUS:     return "kp_+";
+        case KEY_KPMINUS:    return "kp_-";
+        case KEY_KPDOT:      return "kp_.";
+        case KEY_KPEQUAL:    return "kp_=";
+        case KEY_KPLEFTPAREN:return "kp_(";
+        case KEY_KPRIGHTPAREN:return "kp_)";
+        case KEY_KPCOMMA:    return "kp_,";
+        case KEY_KPENTER:    return "kp_enter";
+        case KEY_KPJPCOMMA:  return "kp_jpcomma";
+        case KEY_NUMLOCK:    return "numlock";
+
+        // ── Function keys ──────────────────────────────────────────
+        case KEY_F1:         return "f1";
+        case KEY_F2:         return "f2";
+        case KEY_F3:         return "f3";
+        case KEY_F4:         return "f4";
+        case KEY_F5:         return "f5";
+        case KEY_F6:         return "f6";
+        case KEY_F7:         return "f7";
+        case KEY_F8:         return "f8";
+        case KEY_F9:         return "f9";
+        case KEY_F10:        return "f10";
+        case KEY_F11:        return "f11";
+        case KEY_F12:        return "f12";
+        case KEY_F13:        return "f13";
+        case KEY_F14:        return "f14";
+        case KEY_F15:        return "f15";
+        case KEY_F16:        return "f16";
+        case KEY_F17:        return "f17";
+        case KEY_F18:        return "f18";
+        case KEY_F19:        return "f19";
+        case KEY_F20:        return "f20";
+        case KEY_F21:        return "f21";
+        case KEY_F22:        return "f22";
+        case KEY_F23:        return "f23";
+        case KEY_F24:        return "f24";
+
+        // ── Media / AC keys ────────────────────────────────────────
+        case KEY_PLAYPAUSE:  return "playpause";
+        case KEY_STOP:       return "stop";
+        case KEY_NEXTSONG:   return "nextsong";
+        case KEY_PREVIOUSSONG: return "prevsong";
+        case KEY_MUTE:       return "mute";
+        case KEY_VOLUMEUP:   return "volumeup";
+        case KEY_VOLUMEDOWN: return "volumedown";
+        case KEY_POWER:      return "power";
+        case KEY_WAKEUP:     return "wakeup";
+        case KEY_SLEEP:     return "sleep";
+        case KEY_EJECTCD:    return "ejectcd";
+        case KEY_EJECTCLOSECD: return "ejectclosecd";
+        case KEY_BRIGHTNESSDOWN: return "brightnessdown";
+        case KEY_BRIGHTNESSUP:   return "brightnessup";
+        case KEY_KBDILLUMTOGGLE: return "kbdillumtoggle";
+        case KEY_KBDILLUMDOWN:   return "kbdillumdown";
+        case KEY_KBDILLUMUP:     return "kbdillumup";
+        case KEY_MICMUTE:    return "micmute";
+
+        // ── Misc / AC shortcuts ────────────────────────────────────
+        case KEY_WWW:        return "www";
+        case KEY_MAIL:       return "mail";
+        case KEY_CALC:       return "calc";
+        case KEY_COMPUTER:   return "computer";
+        case KEY_SEARCH:     return "search";
+        case KEY_HOMEPAGE:   return "homepage";
+        case KEY_BACK:       return "browser_back";
+        case KEY_FORWARD:    return "browser_forward";
+        case KEY_REFRESH:    return "browser_refresh";
+        case KEY_BOOKMARKS:  return "browser_bookmarks";
+        case KEY_ZOOMIN:     return "zoom_in";
+        case KEY_ZOOMOUT:    return "zoom_out";
+        case KEY_SCALE:      return "scale";
+
+        default:             return "";  // Unknown key — skip
     }
 }
 
@@ -75,23 +261,7 @@ std::string InputMonitor::button_to_name(int code) {
 }
 
 std::string InputMonitor::key_to_name(int code) {
-    switch (code) {
-        case KEY_LEFTCTRL:   return "ctrl_l";
-        case KEY_RIGHTCTRL:  return "ctrl_r";
-        case KEY_LEFTSHIFT:  return "shift_l";
-        case KEY_RIGHTSHIFT: return "shift_r";
-        case KEY_LEFTALT:    return "alt_l";
-        case KEY_RIGHTALT:   return "alt_r";
-        case KEY_LEFTMETA:   return "super_l";
-        case KEY_RIGHTMETA:  return "super_r";
-        case KEY_ESC:        return "esc";
-        case KEY_BACKSPACE:  return "backspace";
-        case KEY_DELETE:     return "delete";
-        case KEY_ENTER:      return "enter";
-        case KEY_TAB:        return "tab";
-        case KEY_FN:         return "fn";
-        default:             return "";
-    }
+    return key_to_name_impl(code);
 }
 
 // ─── Cursor Position ──────────────────────────────────────────
@@ -239,8 +409,8 @@ void InputMonitor::process_event(DeviceInfo& dev, const ::input_event& ev) {
         int code = ev.code;
         int value = ev.value;  // 0=up, 1=down, 2=repeat
 
-        // Track Ctrl state
-        if (code == KEY_LEFTCTRL || code == KEY_RIGHTCTRL) {
+        // Track Ctrl state for Ctrl+Fx hotkey detection
+        if (is_modifier_key(code)) {
             ctrl_pressed_ = (value != 0);
         }
 
@@ -275,16 +445,19 @@ void InputMonitor::process_event(DeviceInfo& dev, const ::input_event& ev) {
             }
         }
 
-        // Key events (modifiers and special keys)
+        // ── ALL key events (for hotkey / combo recording) ──────────
+        // Previously this only tracked a restrictive "special key" allowlist,
+        // which silently dropped letters/numbers/symbols — breaking combos
+        // like Ctrl+A, Shift+1, Ctrl+Shift+5, etc.
         if (dev.is_keyboard && (value == 0 || value == 1)) {
-            // Match V1 policy: explicit special-key allowlist only.
-            if (is_tracked_special_key(code)) {
+            std::string name = key_to_name_impl(code);
+            // Skip keys with no valid name mapping (e.g. KEY_UNKNOWN)
+            if (!name.empty()) {
                 RawInputEvent raw;
                 raw.type = (value == 1) ? RawEventType::KEYBOARD_DOWN : RawEventType::KEYBOARD_UP;
                 raw.timestamp_sec = monotonic_now();
                 raw.key_code = code;
-                raw.key_name = key_to_name(code);
-                if (raw.key_name.empty()) return;
+                raw.key_name = std::move(name);
 
                 auto [cx, cy] = get_cursor_position();
                 raw.x = cx;

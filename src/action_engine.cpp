@@ -18,6 +18,16 @@
 
 namespace cua {
 
+// Returns true for modifier key names.
+// Must match the naming produced by InputMonitor::key_to_name().
+bool ActionEngine::is_modifier_key(const std::string& name) {
+    return name == "ctrl_l"  || name == "ctrl_r"  ||
+           name == "shift_l" || name == "shift_r" ||
+           name == "alt_l"   || name == "alt_r"   ||
+           name == "super_l" || name == "super_r" ||
+           name == "fn";
+}
+
 ActionEngine::ActionEngine(RingBuffer& buffer, InputMonitor& input)
     : buffer_(buffer), input_(input) {}
 
@@ -61,15 +71,22 @@ void ActionEngine::merge_key_into_pending_locked(PendingAction& pending,
                                                  const RawInputEvent& down_ev,
                                                  const RawInputEvent& up_ev,
                                                  double press_ts,
-                                                 double release_ts) {
+                                                 double release_ts,
+                                                 const std::vector<std::string>& combo) {
     pending.raw_events.push_back(down_ev);
     pending.raw_events.push_back(up_ev);
-    pending.keys_pressed.push_back(up_ev.key_name);
-    pending.key_actions.push_back({up_ev.key_name, press_ts, release_ts});
     pending.event_ts = std::min(pending.event_ts, press_ts);
     pending.last_event_ts = std::max(pending.last_event_ts, release_ts);
     pending.required_post_ts = std::max(pending.required_post_ts,
                                         release_ts + POST_FRAME_OFFSET);
+    // Record the full key combination if provided (state-based tracking).
+    if (!combo.empty()) {
+        // Append the combo keys (deduplicate against existing keys_pressed).
+        for (const auto& k : combo) {
+            pending.keys_pressed.push_back(k);
+        }
+    }
+    pending.key_actions.push_back({up_ev.key_name, press_ts, release_ts});
     pending.release_ts = std::max(pending.release_ts, release_ts);
 }
 
@@ -255,9 +272,16 @@ void ActionEngine::handle_scroll(const RawInputEvent& ev) {
 void ActionEngine::handle_key(const RawInputEvent& ev) {
     std::lock_guard lock(pending_mu_);
 
-    auto& state = key_states_[ev.key_name];
+    const bool is_down = (ev.type == RawEventType::KEYBOARD_DOWN);
 
-    if (ev.type == RawEventType::KEYBOARD_DOWN) {
+    if (is_down) {
+        // ── Key press: add to active set ───────────────────────────
+        if (is_modifier_key(ev.key_name)) {
+            modifier_press_ts_[ev.key_name] = ev.timestamp_sec;
+        }
+        active_keys_.insert(ev.key_name);
+
+        auto& state = key_states_[ev.key_name];
         if (!state.pressed) {
             state.pressed = true;
             state.down_ts = ev.timestamp_sec;
@@ -267,34 +291,73 @@ void ActionEngine::handle_key(const RawInputEvent& ev) {
         return;
     }
 
-    if (ev.type != RawEventType::KEYBOARD_UP || !state.pressed) return;
+    // ── Key release: record combination ──────────────────────────
 
+    // Debounce: skip modifier releases that were held for less than the threshold.
+    // This filters out accidental modifier taps.
+    if (is_modifier_key(ev.key_name)) {
+        auto it = modifier_press_ts_.find(ev.key_name);
+        if (it != modifier_press_ts_.end()) {
+            double elapsed_ms = (ev.timestamp_sec - it->second) * 1000.0;
+            modifier_press_ts_.erase(it);
+            if (elapsed_ms < MODIFIER_DEBOUNCE_MS) {
+                // Accidental modifier tap — remove from active set and skip.
+                active_keys_.erase(ev.key_name);
+                return;
+            }
+        }
+    }
+
+    // Snapshot the full active combination BEFORE removing the released key.
+    // This captures modifiers that were held simultaneously with the released key.
+    std::vector<std::string> combo;
+    combo.reserve(active_keys_.size());
+    for (const auto& k : active_keys_) {
+        combo.push_back(k);
+    }
+
+    // Remove the released key from the active set.
+    active_keys_.erase(ev.key_name);
+
+    // Retrieve stored state for this key release.
+    auto& state = key_states_[ev.key_name];
+    const bool had_press = state.pressed;
+    const double press_ts = state.down_ts;
+    const double release_ts = ev.timestamp_sec;
     state.pressed = false;
 
+    if (!had_press) return;  // Spurious up without down
+
+    // Rebuild the synthetic KEYBOARD_DOWN event from stored state.
     RawInputEvent down_ev;
     down_ev.type = RawEventType::KEYBOARD_DOWN;
-    down_ev.timestamp_sec = state.down_ts;
+    down_ev.timestamp_sec = press_ts;
     down_ev.x = state.down_x;
     down_ev.y = state.down_y;
     down_ev.key_code = ev.key_code;
     down_ev.key_name = ev.key_name;
 
-    if (auto* existing = find_merge_candidate_locked(state.down_ts, ev.timestamp_sec)) {
-        merge_key_into_pending_locked(*existing, down_ev, ev, state.down_ts, ev.timestamp_sec);
+    // Try to merge with an overlapping mouse/other pending action.
+    if (auto* existing = find_merge_candidate_locked(press_ts, release_ts)) {
+        merge_key_into_pending_locked(*existing, down_ev, ev, press_ts, release_ts,
+                                      combo);
         return;
     }
 
-    auto pending = create_pending(ActionType::HOTKEY, state.down_ts,
+    // Create a new pending hotkey action.
+    auto pending = create_pending(ActionType::HOTKEY, press_ts,
                                   state.down_x, state.down_y, "", 0, 0);
-    pending.press_ts = state.down_ts;
-    pending.release_ts = ev.timestamp_sec;
-    pending.required_post_ts = ev.timestamp_sec + POST_FRAME_OFFSET;
-    pending.last_event_ts = ev.timestamp_sec;
+    pending.press_ts = press_ts;
+    pending.release_ts = release_ts;
+    pending.required_post_ts = release_ts + POST_FRAME_OFFSET;
+    pending.last_event_ts = release_ts;
 
     pending.raw_events.push_back(std::move(down_ev));
     pending.raw_events.push_back(ev);
-    pending.keys_pressed.push_back(ev.key_name);
-    pending.key_actions.push_back({ev.key_name, state.down_ts, ev.timestamp_sec});
+
+    // Record the full key combination (not just the released key).
+    pending.keys_pressed = std::move(combo);
+    pending.key_actions.push_back({ev.key_name, press_ts, release_ts});
 
     pending_.push_back(std::move(pending));
 }
