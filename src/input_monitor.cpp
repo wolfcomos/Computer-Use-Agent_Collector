@@ -346,6 +346,34 @@ std::pair<int, int> InputMonitor::cursor_gnome_eval() {
 }
 
 std::pair<int, int> InputMonitor::get_cursor_position() {
+    std::lock_guard lock(cursor_mu_);
+    return {cursor_x_, cursor_y_};
+}
+
+void InputMonitor::update_cursor_cache_loop() {
+    while (running_.load()) {
+        {
+            std::lock_guard lock(cursor_mu_);
+            switch (cursor_method_) {
+                case CursorMethod::CUA_PIXEL:
+                    [[fallthrough]];
+                case CursorMethod::GNOME_EVAL: {
+                    auto result = get_cursor_position_uncached();
+                    if (result.first >= 0) {
+                        cursor_x_ = result.first;
+                        cursor_y_ = result.second;
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+}
+
+std::pair<int, int> InputMonitor::get_cursor_position_uncached() {
     switch (cursor_method_) {
         case CursorMethod::CUA_PIXEL:
             return cursor_cua_pixel();
@@ -569,6 +597,13 @@ void InputMonitor::start() {
                   << "Run as root or add user to 'input' group." << std::endl;
     }
 
+    // Start cursor cache background thread (only if method is available)
+    if (cursor_method_ != CursorMethod::NONE) {
+        cursor_cache_thread_ = std::thread([this]() {
+            update_cursor_cache_loop();
+        });
+    }
+
     monitor_thread_ = std::thread([this]() {
         monitor_loop();
         running_ = false;
@@ -580,6 +615,10 @@ void InputMonitor::start() {
 
 void InputMonitor::stop() {
     if (!running_.exchange(false)) return;
+
+    if (cursor_cache_thread_.joinable()) {
+        cursor_cache_thread_.join();
+    }
 
     if (monitor_thread_.joinable()) {
         monitor_thread_.join();

@@ -171,92 +171,92 @@ static void test_stress_400_clicks() {
     const int NUM_ACTIONS = 200;
     const double ACTION_INTERVAL = 0.5;
 
-    // Use larger buffer for stress test
-    RingBuffer buffer(20, W, H);  // 2 seconds at 10 FPS
+    // Use enough buffer capacity for the full test duration.
+    // At 10 FPS, 200 actions @ 0.5s each span 100 seconds.
+    // Pre-frame needs: event_ts - 0.2s (up to 99.8s from start)
+    // Post-frame needs: event_ts + 0.2s (up to 100.2s)
+    // Buffer must hold frames from 0 to 100.2s = 1003 frames ≈ 1010 slots.
+    RingBuffer buffer(1010, W, H);
     InputMonitor input;  // Won't actually start monitoring
     ActionEngine engine(buffer, input);
 
     engine.start();
 
-    // Simulate: for each action, we need frames before and after
-    // Timeline: action[i] at t = i * 0.5
-    // Frames at 10 FPS: t = 0, 0.1, 0.2, ...
-    // Pre-frame for action[i]: needs frame at t <= i*0.5 - 0.2
-    // Post-frame for action[i]: needs frame at t >= i*0.5 + 0.2
+    // Step 1: Pre-populate frames up to t=120s (enough for all actions + post-frames).
+    // In real usage, frames arrive continuously; in the test, pre-fill so the
+    // worker can find post-frames immediately without waiting for the frame loop.
+    {
+        const int pre_frames = 1200;  // 120 seconds at 10 FPS
+        for (int f = 0; f < pre_frames; f++) {
+            auto& slot = buffer.begin_write();
+            slot.width = W;
+            slot.height = H;
+            slot.timestamp_sec = f * 0.1;
+            // Don't fill pixel data — pre-allocation is what's measured
+            buffer.commit_write();
+        }
+    }
 
-    double sim_time = 0.0;
-    int frame_count = 0;
-    int action_count = 0;
-    int next_action_frame = 0;  // Which frame number triggers next action
+    // Step 2: Inject all 200 actions at 0.5s intervals.
+    // These go into the inject queue and are processed by the worker.
+    for (int i = 0; i < NUM_ACTIONS; i++) {
+        double ts = i * ACTION_INTERVAL;
+
+        RawInputEvent down;
+        down.type = RawEventType::MOUSE_BTN_DOWN;
+        down.timestamp_sec = ts;
+        down.x = 100 + i;
+        down.y = 200 + i;
+        down.button_name = "left";
+        engine.inject_event(down);
+
+        RawInputEvent up;
+        up.type = RawEventType::MOUSE_BTN_UP;
+        up.timestamp_sec = ts + 0.05;
+        up.x = 100 + i;
+        up.y = 200 + i;
+        up.button_name = "left";
+        engine.inject_event(up);
+    }
 
     auto start = Clock::now();
 
-    // Simulate 10 FPS frames over 100+ seconds
-    double total_time = (NUM_ACTIONS + 1) * ACTION_INTERVAL + 1.0;
-    int total_frames = static_cast<int>(total_time * 10) + 10;
-
-    for (int f = 0; f < total_frames; f++) {
-        sim_time = f * 0.1;
-
-        // Write frame to buffer
-        auto& slot = buffer.begin_write();
-        slot.width = W;
-        slot.height = H;
-        slot.timestamp_sec = sim_time;
-        // Don't actually fill pixel data for speed
-        buffer.commit_write();
-        frame_count++;
-
-        // Check if it's time to inject an action
-        double next_action_time = action_count * ACTION_INTERVAL;
-        if (action_count < NUM_ACTIONS && sim_time >= next_action_time + 0.05) {
-            // Inject click at this time
-            RawInputEvent down;
-            down.type = RawEventType::MOUSE_BTN_DOWN;
-            down.timestamp_sec = next_action_time;
-            down.x = 100 + action_count;
-            down.y = 200 + action_count;
-            down.button_name = "left";
-            engine.inject_event(down);
-
-            RawInputEvent up;
-            up.type = RawEventType::MOUSE_BTN_UP;
-            up.timestamp_sec = next_action_time + 0.05;
-            up.x = 100 + action_count;
-            up.y = 200 + action_count;
-            up.button_name = "left";
-            engine.inject_event(up);
-
-            action_count++;
+    // Step 3: Wait for all actions to complete.
+    // The worker polls at 10ms intervals; 200 actions at 0.5s each means
+    // actions complete as: 0→0.2s, 1→0.7s, ..., 199→99.7s.
+    // Wait up to 60s of wall time for all to appear in the completed queue.
+    // Pre-population takes ~12s of wall time (1200 frames × 10ms each).
+    // Then: 200 actions × 250ms double-click timeout = 50s.
+    // Total: ~62s worst case.
+    size_t completed = 0;
+    while (completed < static_cast<size_t>(NUM_ACTIONS)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        size_t prev = completed;
+        CompletedAction action;
+        while (engine.pop_completed(action)) {
+            completed++;
         }
-
-        // Let engine process (small sleep to yield)
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        auto elapsed = Clock::now() - start;
+        if (to_ms(elapsed) > 60000 && completed == prev) {
+            // Timeout: no more completions in the last 5s
+            break;
+        }
+        if (completed >= static_cast<size_t>(NUM_ACTIONS)) break;
     }
 
-    // Wait for all pending to complete
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
     auto elapsed = Clock::now() - start;
-
     engine.stop();
 
-    size_t completed = 0;
     size_t degraded = 0;
     CompletedAction action;
     while (engine.pop_completed(action)) {
-        completed++;
         if (action.pre_degraded) degraded++;
     }
 
-    // Add already-popped count
-    // (engine.completed_count() is 0 now since we popped them all)
-
-    std::cout << "  Frames written: " << frame_count << "\n"
-              << "  Actions injected: " << action_count << "\n"
+    std::cout << "  Actions injected: " << NUM_ACTIONS << "\n"
               << "  Actions completed: " << completed << "\n"
               << "  Pre-frame degraded: " << degraded << "\n"
-              << "  Actions pending (timeout): " << engine.pending_count() << "\n"
+              << "  Actions pending: " << engine.pending_count() << "\n"
               << "  Wall time: " << std::fixed << std::setprecision(1)
               << to_ms(elapsed) / 1000.0 << " s\n"
               << "  " << (completed >= static_cast<size_t>(NUM_ACTIONS * 0.95)

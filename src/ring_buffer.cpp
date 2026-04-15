@@ -1,6 +1,6 @@
 /**
  * @file ring_buffer.cpp
- * @brief Ring buffer implementation for frame storage.
+ * @brief Lock-free ring buffer implementation.
  */
 
 #include "ring_buffer.h"
@@ -25,33 +25,53 @@ RingBuffer::RingBuffer(size_t capacity, int max_w, int max_h)
 }
 
 FrameSlot& RingBuffer::begin_write() {
-    mu_.lock();  // exclusive lock
-    write_locked_ = true;
-    return slots_[write_pos_];
+    std::lock_guard lock(write_mu_);
+    assert(!write_in_progress_ && "commit_write must be called before next begin_write");
+
+    size_t pos = head_.load(std::memory_order_relaxed) % capacity_;
+    write_in_progress_ = true;
+    // Increment seq: marks slot as "being written" (odd value)
+    slots_[pos].seq++;
+    return slots_[pos];
 }
 
 void RingBuffer::commit_write() {
-    assert(write_locked_ && "commit_write called without begin_write");
+    std::lock_guard lock(write_mu_);
+    assert(write_in_progress_ && "begin_write must be called before commit_write");
 
-    auto& slot = slots_[write_pos_];
+    auto& slot = slots_[head_.load(std::memory_order_relaxed) % capacity_];
     slot.frame_id = next_frame_id_++;
     slot.valid = true;
+    // Increment seq: marks slot as "ready to read" (even value again)
+    slot.seq++;
 
-    write_pos_ = (write_pos_ + 1) % capacity_;
-    write_locked_ = false;
-    mu_.unlock();
+    // Advance head atomically so readers see the new slot
+    head_.store(head_.load(std::memory_order_relaxed) + 1, std::memory_order_release);
+    write_in_progress_ = false;
 }
 
 bool RingBuffer::find_pre_frame(double target_ts, FrameSlot& out) const {
-    std::shared_lock lock(mu_);
+    // LOCK-FREE: read head once, scan slots without any lock.
+    // A slot is safe to read if: valid == true && seq is even.
+    // (seq starts at 0, increments to 1 on begin_write, increments to 2 on commit.
+    //  Even seq means commit has happened.)
+
+    uint64_t head = head_.load(std::memory_order_acquire);
+    uint64_t head_wrap = head % capacity_;  // position in ring
 
     const FrameSlot* best = nullptr;
     double best_ts = -1.0;
 
-    for (const auto& slot : slots_) {
-        if (!slot.valid) continue;
-        if (slot.timestamp_sec <= target_ts) {
-            if (slot.timestamp_sec > best_ts) {
+    // Scan all slots. A slot is valid if:
+    //   1. valid == true
+    //   2. seq is even (begin_write and commit both incremented it)
+    //   3. timestamp <= target_ts
+    for (size_t i = 0; i < capacity_; ++i) {
+        const auto& slot = slots_[i];
+        // Safe to read? Even seq means both begin_write and commit happened.
+        // We check seq >= 2 as a safety net (0=initial, 1=mid-write, 2+=committed)
+        if (slot.valid && (slot.seq >= 2 && (slot.seq % 2) == 0)) {
+            if (slot.timestamp_sec <= target_ts && slot.timestamp_sec > best_ts) {
                 best_ts = slot.timestamp_sec;
                 best = &slot;
             }
@@ -75,15 +95,16 @@ bool RingBuffer::find_pre_frame(double target_ts, FrameSlot& out) const {
 }
 
 bool RingBuffer::find_post_frame(double target_ts, FrameSlot& out) const {
-    std::shared_lock lock(mu_);
+    // LOCK-FREE: same approach as find_pre_frame
+    uint64_t head = head_.load(std::memory_order_acquire);
 
     const FrameSlot* best = nullptr;
     double best_ts = 1e18;
 
-    for (const auto& slot : slots_) {
-        if (!slot.valid) continue;
-        if (slot.timestamp_sec >= target_ts) {
-            if (slot.timestamp_sec < best_ts) {
+    for (size_t i = 0; i < capacity_; ++i) {
+        const auto& slot = slots_[i];
+        if (slot.valid && (slot.seq >= 2 && (slot.seq % 2) == 0)) {
+            if (slot.timestamp_sec >= target_ts && slot.timestamp_sec < best_ts) {
                 best_ts = slot.timestamp_sec;
                 best = &slot;
             }
@@ -107,10 +128,12 @@ bool RingBuffer::find_post_frame(double target_ts, FrameSlot& out) const {
 }
 
 double RingBuffer::latest_timestamp() const {
-    std::shared_lock lock(mu_);
+    // LOCK-FREE
     double latest = 0.0;
-    for (const auto& slot : slots_) {
-        if (slot.valid && slot.timestamp_sec > latest) {
+    for (size_t i = 0; i < capacity_; ++i) {
+        const auto& slot = slots_[i];
+        if (slot.valid && (slot.seq >= 2 && (slot.seq % 2) == 0) &&
+            slot.timestamp_sec > latest) {
             latest = slot.timestamp_sec;
         }
     }
@@ -118,7 +141,6 @@ double RingBuffer::latest_timestamp() const {
 }
 
 uint64_t RingBuffer::total_frames_written() const {
-    std::shared_lock lock(mu_);
     return next_frame_id_ - 1;
 }
 

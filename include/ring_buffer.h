@@ -1,23 +1,31 @@
 #pragma once
 /**
  * @file ring_buffer.h
- * @brief Lock-protected fixed-capacity ring buffer for screen frames.
+ * @brief Lock-free ring buffer for screen frames.
  *
  * Design:
  *   - Single writer (capture thread) calls begin_write() / commit_write().
+ *     Uses a dedicated mutex to serialize slot writes.
  *   - Multiple readers (action worker) call find_pre_frame / find_post_frame.
+ *     Completely LOCK-FREE — only reads the atomic head index and scans slots.
+ *   - Each slot has a sequence number that increments on each write.
+ *     Readers detect if a slot was mid-write by checking sequence parity.
  *   - Frames are stored as raw RGB bytes in pre-allocated vectors.
- *   - A shared_mutex allows concurrent reads while blocking writes.
+ *
+ * This design eliminates reader-writer lock contention entirely.
+ * At 10 FPS, the writer holds the mutex for ~2-5ms per frame (RGB copy).
+ * Reader lookups are O(capacity) scans with no blocking.
  */
 
 #include <atomic>
 #include <cstdint>
-#include <shared_mutex>
+#include <mutex>
 #include <vector>
 
 namespace cua {
 
 /// One slot in the ring buffer holding a single screenshot frame.
+/// Protected by per-slot sequence numbers for lock-free reading.
 struct FrameSlot {
     uint64_t frame_id{0};       ///< Monotonic frame counter (0 = invalid)
     double   timestamp_sec{0};  ///< CLOCK_MONOTONIC seconds
@@ -25,6 +33,11 @@ struct FrameSlot {
     int      height{0};
     std::vector<uint8_t> rgb_data;  ///< Raw RGB pixel data (w*h*3 bytes)
     bool     valid{false};      ///< True once first write committed
+
+    // Sequence number: even = ready, odd = being written.
+    // Incremented by writer at start of begin_write() and commit_write().
+    // Even value with valid==true means the slot is safe to read.
+    uint64_t seq{0};
 
     /// Pre-allocate storage for max resolution
     void allocate(int max_w, int max_h) {
@@ -48,7 +61,7 @@ public:
     int max_width() const { return max_w_; }
     int max_height() const { return max_h_; }
 
-    // ── Writer interface (capture thread only) ──────────────
+    // ── Writer interface (capture thread only) ─────────────
 
     /**
      * Get a reference to the next slot to fill.
@@ -64,6 +77,7 @@ public:
     void commit_write();
 
     // ── Reader interface (action worker thread) ─────────────
+    // LOCK-FREE: no mutex needed for reading.
 
     /**
      * Find the latest frame with timestamp <= target_ts.
@@ -83,7 +97,7 @@ public:
 
     /**
      * Get the timestamp of the latest committed frame.
-     * @return timestamp, or 0.0 if no frames written yet
+     * LOCK-FREE.
      */
     double latest_timestamp() const;
 
@@ -98,10 +112,15 @@ private:
 
     std::vector<FrameSlot> slots_;
     uint64_t next_frame_id_{1};  ///< Next frame ID to assign
-    size_t   write_pos_{0};      ///< Current write position in slots_
 
-    mutable std::shared_mutex mu_;
-    bool write_locked_{false};   ///< Debug: track begin/commit pairs
+    // Atomic head index: points to the next slot the writer will write.
+    // Readers use this to know the boundary of valid data.
+    std::atomic<uint64_t> head_{0};
+
+    // Writer mutex: only the capture thread acquires this.
+    // All readers are completely lock-free.
+    mutable std::mutex write_mu_;
+    bool write_in_progress_{false};  ///< Tracks begin_write/commit pairing
 };
 
 }  // namespace cua

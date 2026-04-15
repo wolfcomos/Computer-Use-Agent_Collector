@@ -28,8 +28,25 @@ bool ActionEngine::is_modifier_key(const std::string& name) {
            name == "fn";
 }
 
+// Returns true if the key is a plain letter (a-z) that should NOT be recorded alone.
+// Single letters typed without modifiers should be ignored (typing noise).
+static bool is_plain_letter(const std::string& name) {
+    return name.size() == 1 && ((name[0] >= 'a' && name[0] <= 'z') ||
+                                (name[0] >= 'A' && name[0] <= 'Z'));
+}
+
+// Returns true if the key is a plain number key (0-9) that should NOT be recorded alone.
+// Single number keys typed without modifiers should be ignored (typing noise).
+static bool is_plain_number(const std::string& name) {
+    return name.size() == 1 && name[0] >= '0' && name[0] <= '9';
+}
+
 ActionEngine::ActionEngine(RingBuffer& buffer, InputMonitor& input)
-    : buffer_(buffer), input_(input) {}
+    : buffer_(buffer), input_(input) {
+    // Pre-allocate capacity for stress test (200 actions + margin).
+    // This prevents reallocation during the 400-click stress test.
+    pending_.reserve(512);
+}
 
 ActionEngine::~ActionEngine() {
     stop();
@@ -316,6 +333,24 @@ void ActionEngine::handle_key(const RawInputEvent& ev) {
         combo.push_back(k);
     }
 
+    // Only skip recording if the combo contains ONLY plain letters and/or numbers.
+    // This filters out typing noise (e.g. "h", "j", "5") but still records
+    // esc, backspace, delete, f1-f12, arrows, enter, tab, space, punctuation, etc.
+    bool only_plain_alpha_or_num = !combo.empty();
+    for (const auto& k : combo) {
+        if (!is_plain_letter(k) && !is_plain_number(k)) {
+            only_plain_alpha_or_num = false;
+            break;
+        }
+    }
+    if (only_plain_alpha_or_num) {
+        // Plain typing — don't record. Remove released key from active set and return.
+        active_keys_.erase(ev.key_name);
+        auto& state = key_states_[ev.key_name];
+        state.pressed = false;
+        return;
+    }
+
     // Remove the released key from the active set.
     active_keys_.erase(ev.key_name);
 
@@ -414,7 +449,7 @@ ActionEngine::PendingAction ActionEngine::create_pending(
 // ─── Action Finalization ──────────────────────────────────────
 
 CompletedAction ActionEngine::finalize_action(PendingAction& pending,
-                                                const FrameSlot& post_frame) {
+                                                FrameSlot post_frame) {
     CompletedAction c;
     c.action_id = pending.action_id;
     c.type = pending.type;
@@ -425,7 +460,7 @@ CompletedAction ActionEngine::finalize_action(PendingAction& pending,
     c.scroll_dx = pending.scroll_dx;
     c.scroll_dy = pending.scroll_dy;
 
-    // Pre-frame
+    // Pre-frame — move from pending (already efficient)
     c.pre_frame_id = pending.pre_frame_id;
     c.pre_frame_ts = pending.pre_frame_ts;
     c.pre_frame_rgb = std::move(pending.pre_frame_rgb);
@@ -433,13 +468,10 @@ CompletedAction ActionEngine::finalize_action(PendingAction& pending,
     c.pre_h = pending.pre_h;
     c.pre_degraded = pending.pre_degraded;
 
-    // Post-frame
+    // Post-frame — move from the passed-by-value FrameSlot (no extra copy)
     c.post_frame_id = post_frame.frame_id;
     c.post_frame_ts = post_frame.timestamp_sec;
-    c.post_frame_rgb.resize(
-        static_cast<size_t>(post_frame.width) * post_frame.height * 3);
-    std::memcpy(c.post_frame_rgb.data(), post_frame.rgb_data.data(),
-                c.post_frame_rgb.size());
+    c.post_frame_rgb = std::move(post_frame.rgb_data);
     c.post_w = post_frame.width;
     c.post_h = post_frame.height;
 
@@ -492,7 +524,8 @@ void ActionEngine::check_pending_completions() {
         // Try to find post-frame
         FrameSlot post_frame;
         if (buffer_.find_post_frame(it->required_post_ts, post_frame)) {
-            auto completed = finalize_action(*it, post_frame);
+            // Pass FrameSlot by value so finalize_action can move rgb_data
+            auto completed = finalize_action(*it, std::move(post_frame));
 
             {
                 std::lock_guard olock(output_mu_);

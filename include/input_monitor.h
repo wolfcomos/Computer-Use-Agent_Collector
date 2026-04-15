@@ -150,6 +150,16 @@ private:
     int monitor_offset_x_{0}, monitor_offset_y_{0};
     double monitor_scale_{1.0};
 
+    // Cursor position cache (updated periodically, not per-event)
+    mutable std::mutex cursor_mu_;
+    int cursor_x_{0};
+    int cursor_y_{0};
+
+    // Background cursor update thread
+    std::thread cursor_cache_thread_;
+    void update_cursor_cache_loop();
+    std::pair<int, int> get_cursor_position_uncached();
+
     void detect_cursor_method();
     std::pair<int, int> cursor_cua_pixel();
     std::pair<int, int> cursor_gnome_eval();

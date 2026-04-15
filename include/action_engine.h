@@ -262,8 +262,9 @@ private:
                                   int scroll_dx = 0, int scroll_dy = 0);
 
     // Helper: finalize a pending action with a post-frame
+    // Takes FrameSlot by VALUE so we can move rgb_data instead of copying
     CompletedAction finalize_action(PendingAction& pending,
-                                     const FrameSlot& post_frame);
+                                     FrameSlot post_frame);
     PendingAction* find_merge_candidate_locked(double start_ts, double end_ts);
     void merge_key_into_pending_locked(PendingAction& pending,
                                        const RawInputEvent& down_ev,
