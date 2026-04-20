@@ -154,6 +154,28 @@ public:
         engine_.inject_event(up);
     }
 
+    /// Inject a synthetic mouse drag (for testing)
+    void inject_mouse_drag(double ts, int press_x, int press_y,
+                            int release_x, int release_y,
+                            const std::string& button = "left",
+                            double duration = 0.5) {
+        RawInputEvent down;
+        down.type = RawEventType::MOUSE_BTN_DOWN;
+        down.timestamp_sec = ts;
+        down.x = press_x;
+        down.y = press_y;
+        down.button_name = button;
+        engine_.inject_event(down);
+
+        RawInputEvent up;
+        up.type = RawEventType::MOUSE_BTN_UP;
+        up.timestamp_sec = ts + duration;
+        up.x = release_x;
+        up.y = release_y;
+        up.button_name = button;
+        engine_.inject_event(up);
+    }
+
     /// Inject a synthetic frame into the ring buffer (for testing)
     void inject_frame(double ts, int width, int height) {
         auto& slot = buffer_.begin_write();
@@ -300,6 +322,13 @@ PYBIND11_MODULE(cua_capture, m) {
              py::arg("ts"), py::arg("x"), py::arg("y"),
              py::arg("button") = "left",
              "Inject a synthetic mouse click (for testing)")
+        .def("inject_mouse_drag",
+             &cua::CaptureEngine::inject_mouse_drag,
+             py::arg("ts"), py::arg("press_x"), py::arg("press_y"),
+             py::arg("release_x"), py::arg("release_y"),
+             py::arg("button") = "left",
+             py::arg("duration") = 0.5,
+             "Inject a synthetic mouse drag (for testing)")
         .def("inject_frame",
              &cua::CaptureEngine::inject_frame,
              py::arg("ts"), py::arg("width"), py::arg("height"),

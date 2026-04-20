@@ -56,6 +56,7 @@ def test_synthetic_stress():
     ACTION_INTERVAL = 0.5
     PRE_OFFSET = 0.2
     POST_OFFSET = 0.2
+    EPS = 1e-9
 
     completed = []
     start_time = time.time()
@@ -136,7 +137,7 @@ def test_synthetic_stress():
         if action.pre_frame_ts > 0:
             pre_delta = event_ts - action.pre_frame_ts
             pre_deltas.append(pre_delta)
-            if pre_delta >= PRE_OFFSET:
+            if pre_delta + EPS >= PRE_OFFSET:
                 pre_ok += 1
 
         if action.pre_degraded:
@@ -146,7 +147,7 @@ def test_synthetic_stress():
         if action.post_frame_ts > 0:
             post_delta = action.post_frame_ts - event_ts
             post_deltas.append(post_delta)
-            if post_delta >= POST_OFFSET:
+            if post_delta + EPS >= POST_OFFSET:
                 post_ok += 1
 
     print(f"\n  Timing Analysis:")
@@ -196,6 +197,87 @@ def test_synthetic_stress():
     return passed
 
 
+def test_mouse_drag_buttons():
+    """
+    Regression test for button-specific drag handling.
+    Verifies left, middle, and right drags survive the full Python binding path.
+    """
+    print("\n" + "=" * 60)
+    print("  Mouse Drag Button Test — left / middle / right")
+    print("=" * 60)
+
+    W, H = 320, 240
+    engine = cua_capture.CaptureEngine(
+        buffer_capacity=80,
+        max_width=W,
+        max_height=H,
+        target_fps=10,
+    )
+
+    # Preload frames covering all pre/post lookups. The action engine accepts
+    # injected frames even when live PipeWire capture is not running.
+    for f in range(70):
+        engine.inject_frame(f * 0.1, W, H)
+
+    engine.start()
+    time.sleep(0.1)
+
+    cases = [
+        ("left", 1.0, (20, 30), (80, 90)),
+        ("middle", 2.0, (40, 50), (110, 130)),
+        ("right", 3.0, (60, 70), (140, 160)),
+    ]
+    for button, ts, press, release in cases:
+        engine.inject_mouse_drag(
+            ts,
+            press[0], press[1],
+            release[0], release[1],
+            button,
+            0.5,
+        )
+
+    completed = []
+    deadline = time.time() + 5.0
+    while len(completed) < len(cases) and time.time() < deadline:
+        action = engine.pop_action()
+        if action is not None:
+            completed.append(action)
+        else:
+            time.sleep(0.01)
+
+    engine.stop()
+
+    if len(completed) != len(cases):
+        print(f"    ❌ Completed {len(completed)}/{len(cases)} drags")
+        return False
+
+    completed.sort(key=lambda action: action.event_ts)
+    passed = True
+    for action, (button, _ts, press, release) in zip(completed, cases):
+        checks = [
+            action.type == "drag",
+            action.button_name == button,
+            (action.press_x, action.press_y) == press,
+            (action.release_x, action.release_y) == release,
+        ]
+        if all(checks):
+            print(
+                f"    ✅ {button} drag: "
+                f"{press[0]},{press[1]} -> {release[0]},{release[1]}"
+            )
+        else:
+            print(
+                f"    ❌ {button} drag mismatch: "
+                f"type={action.type}, button={action.button_name}, "
+                f"press=({action.press_x},{action.press_y}), "
+                f"release=({action.release_x},{action.release_y})"
+            )
+            passed = False
+
+    return passed
+
+
 if __name__ == '__main__':
     success = test_synthetic_stress()
+    success = test_mouse_drag_buttons() and success
     sys.exit(0 if success else 1)

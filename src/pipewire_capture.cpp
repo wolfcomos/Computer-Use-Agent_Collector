@@ -500,30 +500,14 @@ void PipeWireCapture::on_process(void* userdata) {
             uint8_t* dp = dst_row;
             for (; sp < send; sp += 16, dp += 12) {
                 __m128i v = _mm_loadu_si128(reinterpret_cast<const __m128i*>(sp));
-                // v = [B,G,R,X] × 4 (little-endian: byte 0 = lowest address)
+                // BGRx/BGRA memory bytes are [B,G,R,X/A]; RGBx/RGBA are [R,G,B,X/A].
                 // _mm_extract_epi32 extracts at 32-bit lane boundaries
-                // Lane 0: [B0,G0,R0,X0], Lane 1: [B1,G1,R1,X1], etc.
+                // Lane 0 contains pixel 0 in the source byte order, lane 1 pixel 1, etc.
                 uint32_t w0 = static_cast<uint32_t>(_mm_cvtsi128_si32(v));
                 uint32_t w1 = static_cast<uint32_t>(_mm_extract_epi32(v, 1));
                 uint32_t w2 = static_cast<uint32_t>(_mm_extract_epi32(v, 2));
                 uint32_t w3 = static_cast<uint32_t>(_mm_extract_epi32(v, 3));
                 if (is_bgrx) {
-                    // BGRx: [X,R,G,B] → [R,G,B]
-                    // w = [X,R,G,B] → extract: B=w&255, G=(w>>8)&255, R=(w>>16)&255
-                    dp[0]  = static_cast<uint8_t>(w0);
-                    dp[1]  = static_cast<uint8_t>(w0 >> 8);
-                    dp[2]  = static_cast<uint8_t>(w0 >> 16);
-                    dp[3]  = static_cast<uint8_t>(w1);
-                    dp[4]  = static_cast<uint8_t>(w1 >> 8);
-                    dp[5]  = static_cast<uint8_t>(w1 >> 16);
-                    dp[6]  = static_cast<uint8_t>(w2);
-                    dp[7]  = static_cast<uint8_t>(w2 >> 8);
-                    dp[8]  = static_cast<uint8_t>(w2 >> 16);
-                    dp[9]  = static_cast<uint8_t>(w3);
-                    dp[10] = static_cast<uint8_t>(w3 >> 8);
-                    dp[11] = static_cast<uint8_t>(w3 >> 16);
-                } else {
-                    // RGBx: [B,G,R,X] → [B,G,R]
                     dp[0]  = static_cast<uint8_t>(w0 >> 16);
                     dp[1]  = static_cast<uint8_t>(w0 >> 8);
                     dp[2]  = static_cast<uint8_t>(w0);
@@ -536,19 +520,32 @@ void PipeWireCapture::on_process(void* userdata) {
                     dp[9]  = static_cast<uint8_t>(w3 >> 16);
                     dp[10] = static_cast<uint8_t>(w3 >> 8);
                     dp[11] = static_cast<uint8_t>(w3);
+                } else {
+                    dp[0]  = static_cast<uint8_t>(w0);
+                    dp[1]  = static_cast<uint8_t>(w0 >> 8);
+                    dp[2]  = static_cast<uint8_t>(w0 >> 16);
+                    dp[3]  = static_cast<uint8_t>(w1);
+                    dp[4]  = static_cast<uint8_t>(w1 >> 8);
+                    dp[5]  = static_cast<uint8_t>(w1 >> 16);
+                    dp[6]  = static_cast<uint8_t>(w2);
+                    dp[7]  = static_cast<uint8_t>(w2 >> 8);
+                    dp[8]  = static_cast<uint8_t>(w2 >> 16);
+                    dp[9]  = static_cast<uint8_t>(w3);
+                    dp[10] = static_cast<uint8_t>(w3 >> 8);
+                    dp[11] = static_cast<uint8_t>(w3 >> 16);
                 }
             }
             // Remainder: 0-3 pixels (simple pointer loop)
             for (int x = bulk; x < width; ++x) {
                 const uint8_t* px = src_row + x * 4;
                 if (is_bgrx) {
-                    dst_row[x * 3 + 0] = px[0];
-                    dst_row[x * 3 + 1] = px[1];
-                    dst_row[x * 3 + 2] = px[2];
-                } else {
                     dst_row[x * 3 + 0] = px[2];
                     dst_row[x * 3 + 1] = px[1];
                     dst_row[x * 3 + 2] = px[0];
+                } else {
+                    dst_row[x * 3 + 0] = px[0];
+                    dst_row[x * 3 + 1] = px[1];
+                    dst_row[x * 3 + 2] = px[2];
                 }
             }
 #else
@@ -558,9 +555,9 @@ void PipeWireCapture::on_process(void* userdata) {
             uint8_t* dp = dst_row;
             if (is_bgrx) {
                 for (; sp < send; sp += 4, dp += 3) {
-                    dp[0] = sp[2];  // B
+                    dp[0] = sp[2];
                     dp[1] = sp[1];  // G
-                    dp[2] = sp[0];  // R
+                    dp[2] = sp[0];
                 }
             } else {
                 for (; sp < send; sp += 4, dp += 3) {

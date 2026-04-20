@@ -237,6 +237,12 @@ void ActionEngine::handle_mouse_up(const RawInputEvent& ev) {
         pending.raw_events.push_back(down_ev);
         pending.raw_events.push_back(ev);
 
+        // If another non-double-click arrives before the previous click timeout
+        // has been processed, preserve the previous click instead of replacing it.
+        if (pending_click_.active) {
+            pending_.push_back(std::move(pending_click_.action));
+        }
+
         // Store as pending click instead of adding to pending_ immediately
         pending_click_.active = true;
         pending_click_.action = std::move(pending);

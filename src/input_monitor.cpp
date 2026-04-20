@@ -390,6 +390,12 @@ void InputMonitor::scan_devices() {
     namespace fs = std::filesystem;
 
     std::string input_dir = "/dev/input";
+    if (!fs::exists(input_dir)) {
+        std::cerr << "[InputMonitor] WARNING: " << input_dir
+                  << " not found; input monitoring disabled" << std::endl;
+        return;
+    }
+
     for (auto& entry : fs::directory_iterator(input_dir)) {
         std::string path = entry.path().string();
         if (path.find("event") == std::string::npos) continue;
