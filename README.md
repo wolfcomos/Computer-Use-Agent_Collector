@@ -13,17 +13,16 @@ Legacy manual collector is archived under [`V1/`](./V1) and deprecated.
 
 ```text
 .
-├── collector.py          # current automated collector entrypoint
-├── cross_platform_capture.py
-│                         # V2 mss+pynput backend for X11/Windows/macOS
-├── run.sh                # Ubuntu Wayland/GNOME launcher
-├── run_x11.sh            # Linux Xorg/X11 launcher
-├── run_win.ps1           # Windows PowerShell launcher
-├── run_mac.sh            # macOS launcher
-├── CMakeLists.txt        # native module build (Linux + Windows)
-├── include/ src/ tests/  # C++ capture engine and platform backends
-├── data/                 # current collector output
-└── V1/                   # deprecated archived collector
+├── collector.py              # current automated collector entrypoint
+├── cross_platform_capture.py # V2 mss+pynput backend for X11/Windows/macOS
+├── run.sh                    # Ubuntu Wayland/GNOME launcher
+├── run_x11.sh                # Linux Xorg/X11 launcher
+├── run_win.ps1               # Windows PowerShell launcher
+├── run_mac.sh                # macOS launcher
+├── CMakeLists.txt            # native module build (Linux + Windows)
+├── include/ src/ tests/      # C++ capture engine and platform backends
+├── data/                     # current collector output
+└── V1/                       # deprecated archived collector
 ```
 
 ## Quick Start
@@ -37,10 +36,11 @@ All launchers run the root V2 collector and keep the same usage style:
 ./run_mac.sh
 ```
 
-Extra collector arguments are passed through, for example:
+Extra collector arguments are optional and can be passed through any launcher,
+for example:
 
 ```bash
-./run_x11.sh --data-dir ./data_x11 --fps 5
+./run.sh --data-dir ./data_wayland --fps 5
 ```
 
 ### Ubuntu Wayland / GNOME
