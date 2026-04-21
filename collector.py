@@ -43,30 +43,37 @@ from concurrent.futures import ThreadPoolExecutor
 from PIL import Image as PILImage
 import io
 
-# Add build dir to path for cua_capture module
+# Add build dir to path for native cua_capture module
 build_dir = Path(__file__).parent / 'build'
 if build_dir.exists():
     sys.path.insert(0, str(build_dir))
 
-try:
-    import cua_capture
-except ImportError as e:
-    err = str(e)
-    if 'GLIBCXX' in err or 'libstdc++' in err:
-        print("❌ libstdc++ version mismatch (miniconda vs system GCC)!")
-        print(f"   Error: {err}")
-        print()
-        print("   Fix: Use the launcher script instead:")
-        print("     ./run.sh")
-        print()
-        print("   Or run directly with:")
-        print("     LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6 python collector.py")
-    elif 'No module named' in err or 'No such file' in err:
-        print("❌ cua_capture module not found!")
-        print("   Build it first: cmake -S . -B build && cmake --build build -j$(nproc)")
-    else:
-        print(f"❌ Failed to import cua_capture: {e}")
-    sys.exit(1)
+CAPTURE_BACKEND = os.environ.get('CUA_CAPTURE_BACKEND', 'native').strip().lower()
+if CAPTURE_BACKEND in ('python', 'mss', 'pynput', 'cross-platform', 'cross_platform'):
+    import cross_platform_capture as cua_capture
+else:
+    try:
+        import cua_capture
+    except ImportError as e:
+        err = str(e)
+        if 'GLIBCXX' in err or 'libstdc++' in err:
+            print("❌ libstdc++ version mismatch (miniconda vs system GCC)!")
+            print(f"   Error: {err}")
+            print()
+            print("   Fix: Use the launcher script instead:")
+            print("     ./run.sh")
+            print()
+            print("   Or run directly with:")
+            print("     LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6 python collector.py")
+        elif 'No module named' in err or 'No such file' in err:
+            print("❌ cua_capture module not found!")
+            print("   Build it first: cmake -S . -B build && cmake --build build -j$(nproc)")
+            print("   For X11/Windows/macOS, use ./run_x11.sh, ./run_win.sh, or ./run_mac.sh")
+        else:
+            print(f"❌ Failed to import cua_capture: {e}")
+        sys.exit(1)
+
+CAPTURE_BACKEND_NAME = getattr(cua_capture, 'BACKEND_NAME', 'pipewire+libevdev')
 
 
 # ============================================================
@@ -343,15 +350,20 @@ class StatusOverlay:
 import platform as plat
 
 def detect_platform():
+    forced_session = os.environ.get('CUA_SESSION_TYPE', '').strip().lower()
     system = plat.system().lower()
     if system == 'linux':
-        session_type = os.environ.get('XDG_SESSION_TYPE', '').lower()
+        session_type = forced_session or os.environ.get('XDG_SESSION_TYPE', '').lower()
         desktop = os.environ.get('XDG_CURRENT_DESKTOP', '').lower()
         if session_type == 'wayland':
             if 'gnome' in desktop:
                 return 'linux', 'wayland-gnome'
             return 'linux', 'wayland'
         return 'linux', 'x11'
+    if system == 'windows':
+        return 'windows', forced_session or 'windows'
+    if system == 'darwin':
+        return 'macos', forced_session or 'macos'
     return system, 'unknown'
 
 OS_NAME, SESSION_TYPE = detect_platform()
@@ -428,6 +440,7 @@ class CollectorV2:
             f"  CUA_Collector V2 – Automated UI Action Data Collector\n"
             f"{'='*60}\n"
             f"  OS: {OS_NAME}  |  Session: {SESSION_TYPE}\n"
+            f"  Backend: {CAPTURE_BACKEND_NAME}\n"
             f"  Max Resolution: {self.resolution[0]}×{self.resolution[1]}\n"
             f"  Data dir: {self.data_store.base_dir.resolve()}\n\n"
             f"  Hotkeys:\n"
@@ -446,11 +459,14 @@ class CollectorV2:
         self.overlay.start()
         self.overlay.update_state('IDLE')
 
-        # Initialize PipeWire portal (may show share dialog)
-        print("  🖥️  Initializing PipeWire screen capture...")
+        # Initialize the selected capture backend. PipeWire may show a share dialog.
+        print(f"  🖥️  Initializing {CAPTURE_BACKEND_NAME} screen capture...")
         if not self.engine.init_portal():
             print("  ❌ Failed to initialize screen capture!")
-            print("  Make sure you're on Wayland/GNOME and approved the share dialog.")
+            if CAPTURE_BACKEND_NAME == 'pipewire+libevdev':
+                print("  Make sure you're on Wayland/GNOME and approved the share dialog.")
+            else:
+                print("  Make sure mss/pynput dependencies are installed and OS permissions are granted.")
             return
 
         # Start capture + input monitoring
