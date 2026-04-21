@@ -42,8 +42,9 @@ static double to_us(Clock::duration d) {
 static double get_rss_mb() {
     FILE* f = fopen("/proc/self/statm", "r");
     if (!f) return 0;
+    long total_pages = 0;
     long pages = 0;
-    [[maybe_unused]] int n = fscanf(f, "%*ld %ld", &pages);
+    [[maybe_unused]] int n = fscanf(f, "%ld %ld", &total_pages, &pages);
     fclose(f);
     return pages * 4096.0 / (1024 * 1024);
 }
