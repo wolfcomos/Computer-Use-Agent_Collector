@@ -26,7 +26,16 @@ case "$(uname -s)" in
         ;;
 esac
 
-export CUA_CAPTURE_BACKEND=python
+if compgen -G "$SCRIPT_DIR/build/cua_capture*.pyd" >/dev/null ||
+   compgen -G "$SCRIPT_DIR/build/*/cua_capture*.pyd" >/dev/null; then
+    export CUA_CAPTURE_BACKEND="${CUA_CAPTURE_BACKEND:-native}"
+else
+    export CUA_CAPTURE_BACKEND="${CUA_CAPTURE_BACKEND:-python}"
+    echo "Native Windows cua_capture module not found; using Python backend."
+    echo "Build native support with:"
+    echo "  cmake -S . -B build -DPython3_EXECUTABLE=\$PWD/.venv/Scripts/python.exe"
+    echo "  cmake --build build --config Release"
+fi
 export CUA_SESSION_TYPE=windows
 
 exec "${PYTHON[@]}" "$SCRIPT_DIR/collector.py" "$@"

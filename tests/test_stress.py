@@ -18,6 +18,10 @@ from pathlib import Path
 build_dir = Path(__file__).parent.parent / 'build'
 if build_dir.exists():
     sys.path.insert(0, str(build_dir))
+    for config_name in ('Release', 'RelWithDebInfo', 'Debug', 'MinSizeRel'):
+        config_dir = build_dir / config_name
+        if config_dir.exists():
+            sys.path.insert(0, str(config_dir))
 
 try:
     import cua_capture

@@ -10,10 +10,24 @@
  * (GetPositionPixel), with fallback to Shell.Eval.
  */
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+// Win32 headers expose generic macros that collide with our scoped enum names.
+#ifdef DOUBLE_CLICK
+#undef DOUBLE_CLICK
+#endif
+#ifdef UNKNOWN
+#undef UNKNOWN
+#endif
+#else
 // Include linux headers BEFORE any namespace to avoid
 // struct name conflicts (input_event, libevdev get pulled into cua::)
 #include <libevdev/libevdev.h>
 #include <linux/input.h>
+#endif
 
 #include <atomic>
 #include <cstdint>
@@ -123,6 +137,18 @@ private:
 
     // Device tracking — use fully-qualified ::libevdev and ::input_event
     // to avoid C++ namespace scoping issues
+#ifdef _WIN32
+    HHOOK keyboard_hook_{nullptr};
+    HHOOK mouse_hook_{nullptr};
+    std::atomic<DWORD> hook_thread_id_{0};
+    bool ctrl_pressed_{false};
+
+    static InputMonitor* active_instance_;
+    static LRESULT CALLBACK keyboard_proc(int code, WPARAM wparam, LPARAM lparam);
+    static LRESULT CALLBACK mouse_proc(int code, WPARAM wparam, LPARAM lparam);
+    void handle_keyboard_event(WPARAM wparam, const KBDLLHOOKSTRUCT& event);
+    void handle_mouse_event(WPARAM wparam, const MSLLHOOKSTRUCT& event);
+#else
     struct DeviceInfo {
         int fd;
         ::libevdev* dev;
@@ -135,10 +161,12 @@ private:
 
     // Keyboard modifier state
     bool ctrl_pressed_{false};
+#endif
 
     // Hotkey callback
     HotkeyCallback hotkey_cb_;
 
+#ifndef _WIN32
     // Cursor position method
     enum class CursorMethod {
         CUA_PIXEL,    // CUA extension v2 (GetPositionPixel)
@@ -163,11 +191,16 @@ private:
     void detect_cursor_method();
     std::pair<int, int> cursor_cua_pixel();
     std::pair<int, int> cursor_gnome_eval();
+#endif
 
     // Monitor thread
+#ifndef _WIN32
     void scan_devices();
+#endif
     void monitor_loop();
+#ifndef _WIN32
     void process_event(DeviceInfo& dev, const ::input_event& ev);
+#endif
     void push_event(RawInputEvent&& ev);
 
     // Helpers

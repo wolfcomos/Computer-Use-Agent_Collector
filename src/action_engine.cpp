@@ -53,9 +53,8 @@ ActionEngine::~ActionEngine() {
 }
 
 double ActionEngine::monotonic_now() const {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
+    using clock = std::chrono::steady_clock;
+    return std::chrono::duration<double>(clock::now().time_since_epoch()).count();
 }
 
 // ─── Mouse Button State ───────────────────────────────────────

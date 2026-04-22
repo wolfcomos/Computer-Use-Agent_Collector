@@ -18,10 +18,11 @@ Legacy manual collector is archived under [`V1/`](./V1) and deprecated.
 │                         # V2 mss+pynput backend for X11/Windows/macOS
 ├── run.sh                # Ubuntu Wayland/GNOME launcher
 ├── run_x11.sh            # Linux Xorg/X11 launcher
-├── run_win.sh            # Windows launcher (Git Bash/MSYS/Cygwin)
+├── run_win.ps1           # Windows PowerShell launcher
+├── run_win.sh            # Windows Git Bash/MSYS/Cygwin launcher
 ├── run_mac.sh            # macOS launcher
-├── CMakeLists.txt        # native module build
-├── include/ src/ tests/  # C++ capture engine
+├── CMakeLists.txt        # native module build (Linux + Windows)
+├── include/ src/ tests/  # C++ capture engine and platform backends
 ├── data/                 # current collector output
 └── V1/                   # deprecated archived collector
 ```
@@ -90,19 +91,63 @@ This path uses the V2 cross-platform backend: `mss` for screenshots and
 
 ### Windows
 
-Use Git Bash/MSYS/Cygwin for the `.sh` launcher:
+Prerequisites:
 
-```bash
+- Install CMake for Windows and enable the installer option that adds CMake to
+  `PATH`. With Chocolatey, run `choco install cmake --installargs
+  'ADD_CMAKE_TO_PATH=System' -y`; this is separate from the Visual Studio C++
+  workload.
+- Install Visual Studio Build Tools with the "Desktop development with C++"
+  workload, including the MSVC compiler and a Windows SDK.
+- Close and reopen PowerShell after installing them, then confirm
+  `cmake --version` works. If CMake is installed but not on `PATH`, use
+  `& "C:\Program Files\CMake\bin\cmake.exe"` in place of `cmake`.
+
+From PowerShell:
+
+```powershell
 git clone https://github.com/Zdong104/CUA_Collector.git
 cd CUA_Collector
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt
 
+cmake -S . -B build -DPython3_EXECUTABLE="$PWD\.venv\Scripts\python.exe"
+cmake --build build --config Release
+```
+
+Then launch from PowerShell:
+
+```powershell
+.\run_win.ps1
+```
+
+If script execution is blocked, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run_win.ps1
+```
+
+If you prefer Git Bash/MSYS/Cygwin, launch with:
+
+```bash
 ./run_win.sh
 ```
 
+If you are already inside Git Bash, the equivalent build command is:
+
+```bash
+cmake -S . -B build -DPython3_EXECUTABLE=$PWD/.venv/Scripts/python.exe
+cmake --build build --config Release
+```
+
+This path uses the native Windows V2 backend when `build/**/cua_capture*.pyd`
+exists: Win32 GDI for screenshots and low-level Win32 hooks for input events.
+If the native module is not built, `run_win.sh` falls back to the Python
+`mss+pynput` backend so the expected launcher still works.
+
 Windows may require allowing Python/Terminal through privacy or security prompts
-before global input monitoring works.
+before global input monitoring works. To force the Python backend explicitly,
+run `CUA_CAPTURE_BACKEND=python ./run_win.sh`.
 
 ### macOS
 

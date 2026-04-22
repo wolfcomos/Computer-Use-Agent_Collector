@@ -210,6 +210,11 @@ private:
 PYBIND11_MODULE(cua_capture, m) {
     m.doc() = "CUA Capture Engine — high-performance screen capture with "
               "ring buffer and event correlation";
+#ifdef _WIN32
+    m.attr("BACKEND_NAME") = "win32-gdi+low-level-hooks";
+#else
+    m.attr("BACKEND_NAME") = "pipewire+libevdev";
+#endif
 
     // ── Enums ───────────────────────────────────────────────
     py::enum_<cua::ActionType>(m, "ActionType")
@@ -295,7 +300,7 @@ PYBIND11_MODULE(cua_capture, m) {
              py::arg("target_fps") = 10)
         .def("init_portal", &cua::CaptureEngine::init_portal,
              py::arg("gjs_script_path") = "",
-             "Initialize PipeWire portal (may show GNOME share dialog)")
+             "Initialize platform screen capture")
         .def("start", &cua::CaptureEngine::start,
              "Start all capture/input/action threads")
         .def("stop", &cua::CaptureEngine::stop,

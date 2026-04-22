@@ -47,6 +47,10 @@ import io
 build_dir = Path(__file__).parent / 'build'
 if build_dir.exists():
     sys.path.insert(0, str(build_dir))
+    for config_name in ('Release', 'RelWithDebInfo', 'Debug', 'MinSizeRel'):
+        config_dir = build_dir / config_name
+        if config_dir.exists():
+            sys.path.insert(0, str(config_dir))
 
 CAPTURE_BACKEND = os.environ.get('CUA_CAPTURE_BACKEND', 'native').strip().lower()
 if CAPTURE_BACKEND in ('python', 'mss', 'pynput', 'cross-platform', 'cross_platform'):
@@ -67,7 +71,12 @@ else:
             print("     LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libstdc++.so.6 python collector.py")
         elif 'No module named' in err or 'No such file' in err:
             print("❌ cua_capture module not found!")
-            print("   Build it first: cmake -S . -B build && cmake --build build -j$(nproc)")
+            if sys.platform.startswith('win'):
+                print("   Build it first:")
+                print("     cmake -S . -B build -DPython3_EXECUTABLE=%CD%\\.venv\\Scripts\\python.exe")
+                print("     cmake --build build --config Release")
+            else:
+                print("   Build it first: cmake -S . -B build && cmake --build build -j$(nproc)")
             print("   For X11/Windows/macOS, use ./run_x11.sh, ./run_win.sh, or ./run_mac.sh")
         else:
             print(f"❌ Failed to import cua_capture: {e}")

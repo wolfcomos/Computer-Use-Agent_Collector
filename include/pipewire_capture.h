@@ -11,6 +11,59 @@
  *   4. Frame rate throttled to target FPS (skip excess frames).
  */
 
+#ifdef _WIN32
+
+#include "ring_buffer.h"
+
+#include <atomic>
+#include <functional>
+#include <string>
+#include <thread>
+
+namespace cua {
+
+class PipeWireCapture {
+public:
+    explicit PipeWireCapture(RingBuffer& buffer, int target_fps = 10);
+    ~PipeWireCapture();
+
+    PipeWireCapture(const PipeWireCapture&) = delete;
+    PipeWireCapture& operator=(const PipeWireCapture&) = delete;
+
+    bool init_portal(const std::string& gjs_script_path = "");
+    void start();
+    void stop();
+
+    bool is_running() const { return running_.load(); }
+    int node_id() const { return -1; }
+    int pw_fd() const { return -1; }
+
+    using StatusCallback = std::function<void(const std::string&)>;
+    void set_status_callback(StatusCallback cb) { status_cb_ = std::move(cb); }
+
+private:
+    RingBuffer& buffer_;
+    int target_fps_;
+    double min_frame_interval_;
+    std::thread capture_thread_;
+    std::atomic<bool> running_{false};
+    bool initialized_{false};
+    int virtual_left_{0};
+    int virtual_top_{0};
+    int capture_width_{0};
+    int capture_height_{0};
+    double last_frame_ts_{0.0};
+    StatusCallback status_cb_;
+
+    void log_status(const std::string& msg);
+    void capture_loop();
+    bool capture_frame();
+};
+
+}  // namespace cua
+
+#else
+
 // Include PipeWire/SPA headers BEFORE namespace to avoid scoping issues
 #include <pipewire/pipewire.h>
 #include <spa/param/video/format-utils.h>
@@ -131,3 +184,5 @@ private:
 };
 
 }  // namespace cua
+
+#endif

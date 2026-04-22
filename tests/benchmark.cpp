@@ -24,6 +24,12 @@
 using namespace cua;
 using Clock = std::chrono::steady_clock;
 
+#if defined(_MSC_VER)
+#define CUA_RESTRICT __restrict
+#else
+#define CUA_RESTRICT __restrict__
+#endif
+
 static double to_ms(Clock::duration d) {
     return std::chrono::duration<double, std::milli>(d).count();
 }
@@ -78,8 +84,8 @@ static void test_ring_buffer_write() {
         slot.timestamp_sec = i * 0.1;
 
         // Simulate BGRx → RGB conversion (optimized: 4 pixels at a time)
-        const uint8_t* __restrict__ src = fake_bgrx.data();
-        uint8_t* __restrict__ dst = slot.rgb_data.data();
+        const uint8_t* CUA_RESTRICT src = fake_bgrx.data();
+        uint8_t* CUA_RESTRICT dst = slot.rgb_data.data();
         const size_t pixels = static_cast<size_t>(W) * H;
         const size_t pixels4 = pixels & ~3ULL;
         size_t si = 0, di = 0;
